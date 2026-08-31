@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.*
 import android.util.Size
 import android.view.View
@@ -15,7 +17,6 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,12 +41,24 @@ class MainActivity : AppCompatActivity() {
         .connectionPool(ConnectionPool(5, 5, java.util.concurrent.TimeUnit.MINUTES))
         .build()
 
-    private var lastScannedCode = ""
-    private var lastScanTime = 0L
+    // متغيرات التحكم الذكي في منع التكرار
+    private var lastScannedCode: String? = null
+    private var lastScanTime: Long = 0L
+    private var isFrameClear: Boolean = true
+    private var emptyFramesCount: Int = 0
+
+    // مولد صوت الصافرة عند المسح الناجح
+    private var toneGenerator: ToneGenerator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
 
@@ -58,7 +71,7 @@ class MainActivity : AppCompatActivity() {
         edtServerPort = findViewById(R.id.edtServerPort)
         btnSaveSettings = findViewById(R.id.btnSaveSettings)
 
-        // تحميل الإعدادات الافتراضية
+        // تحميل الإعدادات المحفوظة
         val savedIp = prefs.getString("server_ip", "192.168.1.100")
         val savedPort = prefs.getString("server_port", "5005")
         edtServerIp.setText(savedIp)
@@ -106,14 +119,30 @@ class MainActivity : AppCompatActivity() {
                     val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
                     scanner.process(image)
                         .addOnSuccessListener { barcodes ->
-                            for (barcode in barcodes) {
-                                val code = barcode.rawValue ?: continue
-                                val now = System.currentTimeMillis()
-                                
-                                // منع الإرسال المكرر لنفس الكود خلال ثانية واحدة
-                                if (code != lastScannedCode || (now - lastScanTime) > 1200) {
+                            val now = System.currentTimeMillis()
+
+                            // الحالة 1: الكادر فارغ (لا يوجد أي باركود أمام الكاميرا)
+                            if (barcodes.isEmpty()) {
+                                emptyFramesCount++
+                                if (emptyFramesCount >= 3) { // تأكيد خلو الكادر
+                                    isFrameClear = true
+                                }
+                            } else {
+                                // الحالة 2: تم اكتشاف باركود
+                                emptyFramesCount = 0
+                                val barcode = barcodes[0]
+                                val code = barcode.rawValue ?: return@addOnSuccessListener
+
+                                val isDifferentCode = (code != lastScannedCode)
+                                val hasLeftAndReturned = (isFrameClear && (now - lastScanTime > 1500))
+                                val isCooldownPassed = (now - lastScanTime > 3500)
+
+                                // شروط الإرسال: صنف جديد، أو أُبعد وأُعيد، أو مر وقت كافي
+                                if (isDifferentCode || hasLeftAndReturned || isCooldownPassed) {
                                     lastScannedCode = code
                                     lastScanTime = now
+                                    isFrameClear = false
+
                                     onBarcodeDetected(code)
                                 }
                             }
@@ -137,7 +166,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onBarcodeDetected(code: String) {
-        vibratePhone()
+        triggerFeedback()
 
         val ip = prefs.getString("server_ip", "192.168.1.100")
         val port = prefs.getString("server_port", "5005")
@@ -145,10 +174,9 @@ class MainActivity : AppCompatActivity() {
 
         runOnUiThread {
             txtLastCode.text = "الباركود: $code"
-            txtStatus.text = "⚡ جاري الإرسال إلى $targetUrl..."
+            txtStatus.text = "⚡ تم الإرسال إلى $targetUrl..."
         }
 
-        // إرسال الباركود عبر HTTP POST فوري
         val jsonPayload = JSONObject().apply {
             put("barcode", code)
         }
@@ -170,21 +198,27 @@ class MainActivity : AppCompatActivity() {
                 val isSuccess = response.isSuccessful
                 runOnUiThread {
                     if (isSuccess) {
-                        txtStatus.text = "✅ تم النقل بنجاح إلى النظام!"
+                        txtStatus.text = "✅ تم الإرسال بنجاح (مسحة واحدة)"
                     } else {
-                        txtStatus.text = "⚠️ رد الخادم بكود خطأ: ${response.code}"
+                        txtStatus.text = "⚠️ رد الخادم بكود: ${response.code}"
                     }
                 }
             }
         })
     }
 
-    private fun vibratePhone() {
+    private fun triggerFeedback() {
+        try {
+            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator?.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE))
+            vibrator?.vibrate(VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
-            vibrator?.vibrate(80)
+            vibrator?.vibrate(70)
         }
     }
 
@@ -192,12 +226,8 @@ class MainActivity : AppCompatActivity() {
         this, Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1001 && allPermissionsGranted()) {
-            startCamera()
-        } else {
-            Toast.makeText(this, "يجب منح إذن الكاميرا لمسح الباركود", Toast.LENGTH_LONG).show()
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        toneGenerator?.release()
     }
 }
