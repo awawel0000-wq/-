@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
+    // عناصر الواجهة
     private lateinit var previewView: PreviewView
     private lateinit var dotConnectionStatus: View
     private lateinit var txtConnectionStatus: TextView
@@ -49,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtItemDetails: TextView
     private lateinit var txtStatusBadge: TextView
 
+    // إعدادات والشبكة
     private lateinit var prefs: SharedPreferences
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -351,7 +353,7 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  |  الباركود: $code" else "الباركود: $code"
                             txtStatusBadge.text = "✅ تم الإرسال والإضافة للفاتورة"
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
-                        } else if (!isFound || response.code() == 404) {
+                        } else if (!isFound || response.code == 404) {
                             playToneWarning()
                             vibrateWarning()
                             txtItemName.text = "⚠️ صنف غير معرّف!"
