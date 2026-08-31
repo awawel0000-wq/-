@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.*
@@ -133,6 +134,9 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "تم حفظ الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
             checkServerStatus()
         }
+
+        setDotColor("#EF4444")
+        setBadgeStyle("#1E293B", "#38BDF8", "#334155")
     }
 
     private fun loadSettings() {
@@ -144,6 +148,25 @@ class MainActivity : AppCompatActivity() {
         val ip = prefs.getString("server_ip", "192.168.1.100")?.trim() ?: "192.168.1.100"
         val port = prefs.getString("server_port", "5005")?.trim() ?: "5005"
         return "http://$ip:$port"
+    }
+
+    private fun setDotColor(colorHex: String) {
+        val shape = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(colorHex))
+        }
+        dotConnectionStatus.background = shape
+    }
+
+    private fun setBadgeStyle(bgColorHex: String, textColorHex: String, strokeColorHex: String) {
+        val shape = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 16f
+            setColor(Color.parseColor(bgColorHex))
+            setStroke(2, Color.parseColor(strokeColorHex))
+        }
+        txtStatusBadge.background = shape
+        txtStatusBadge.setTextColor(Color.parseColor(textColorHex))
     }
 
     private fun startHeartbeat() {
@@ -178,11 +201,11 @@ class MainActivity : AppCompatActivity() {
         isServerConnected = connected
         runOnUiThread {
             if (connected) {
-                dotConnectionStatus.setBackgroundResource(R.drawable.dot_green)
+                setDotColor("#22C55E")
                 txtConnectionStatus.text = "متصل بنظام الأوائل ✅"
                 txtConnectionStatus.setTextColor(Color.parseColor("#22C55E"))
             } else {
-                dotConnectionStatus.setBackgroundResource(R.drawable.dot_red)
+                setDotColor("#EF4444")
                 txtConnectionStatus.text = "غير متصل بالخادم 🔴"
                 txtConnectionStatus.setTextColor(Color.parseColor("#EF4444"))
             }
@@ -308,8 +331,7 @@ class MainActivity : AppCompatActivity() {
                     txtItemName.text = "🔴 فشل الاتصال بالشبكة!"
                     txtItemDetails.text = "الباركود: $code (تم حفظه في الانتظار)"
                     txtStatusBadge.text = "⚠️ تم الحفظ محلياً للإرسال التلقائي"
-                    txtStatusBadge.setBackgroundResource(R.drawable.badge_error)
-                    txtStatusBadge.setTextColor(Color.parseColor("#EF4444"))
+                    setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
                 }
             }
 
@@ -328,24 +350,21 @@ class MainActivity : AppCompatActivity() {
                             txtItemName.text = itemName
                             txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  |  الباركود: $code" else "الباركود: $code"
                             txtStatusBadge.text = "✅ تم الإرسال والإضافة للفاتورة"
-                            txtStatusBadge.setBackgroundResource(R.drawable.badge_success)
-                            txtStatusBadge.setTextColor(Color.parseColor("#4ADE80"))
-                        } else if (!isFound || response.code == 404) {
+                            setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                        } else if (!isFound || response.code() == 404) {
                             playToneWarning()
                             vibrateWarning()
                             txtItemName.text = "⚠️ صنف غير معرّف!"
                             txtItemDetails.text = "الباركود: $code"
                             txtStatusBadge.text = "لا يوجد صنف بهذا الباركود في النظام"
-                            txtStatusBadge.setBackgroundResource(R.drawable.badge_warning)
-                            txtStatusBadge.setTextColor(Color.parseColor("#F59E0B"))
+                            setBadgeStyle("#78350F", "#F59E0B", "#D97706")
                         } else {
                             playToneSuccess()
                             vibrateSuccess()
                             txtItemName.text = "الباركود: $code"
                             txtItemDetails.text = "تم الاستلام بنجاح"
                             txtStatusBadge.text = "✅ تم النقل بنجاح"
-                            txtStatusBadge.setBackgroundResource(R.drawable.badge_success)
-                            txtStatusBadge.setTextColor(Color.parseColor("#4ADE80"))
+                            setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
                     }
                 } catch (e: Exception) {
@@ -355,8 +374,7 @@ class MainActivity : AppCompatActivity() {
                         txtItemName.text = "الباركود: $code"
                         txtItemDetails.text = "تم الإرسال بنجاح"
                         txtStatusBadge.text = "✅ تم الاستلام بنجاح"
-                        txtStatusBadge.setBackgroundResource(R.drawable.badge_success)
-                        txtStatusBadge.setTextColor(Color.parseColor("#4ADE80"))
+                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                     }
                 }
             }
