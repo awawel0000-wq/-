@@ -1,4 +1,4 @@
-name: Build Barcode Scanner APK
+name: Build Barcode Scanner APK and Bundle
 
 on:
   push:
@@ -27,14 +27,20 @@ jobs:
       with:
         gradle-version: '8.2'
 
-    - name: Build APK
+    - name: Build APK & AAB
       run: |
         gradle wrapper --gradle-version 8.2
         chmod +x gradlew
-        ./gradlew assembleDebug
+        ./gradlew assembleDebug bundleRelease
 
-    - name: Upload APK Artifact
+    - name: Upload APK for Mobile Installation
       uses: actions/upload-artifact@v4
       with:
-        name: BarcodeScannerApp-APK
+        name: AlAwael-Barcode-APK
         path: app/build/outputs/apk/debug/app-debug.apk
+
+    - name: Upload AAB for Google Play Store
+      uses: actions/upload-artifact@v4
+      with:
+        name: AlAwael-GooglePlay-Bundle
+        path: app/build/outputs/bundle/release/app-release.aab
