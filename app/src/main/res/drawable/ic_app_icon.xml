@@ -1,0 +1,63 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M14,0 L94,0 A14,14 0 0,1 108,14 L108,94 A14,14 0 0,1 94,108 L14,108 A14,14 0 0,1 0,94 L0,14 A14,14 0 0,1 14,0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#0F172A" />
+                <item android:offset="1.0" android:color="#0369A1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <path
+        android:pathData="M54,18 L84,30 C84,58 54,82 54,82 C54,82 24,58 24,30 Z"
+        android:strokeWidth="3.5">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="24"
+                android:startY="18"
+                android:endX="84"
+                android:endY="82"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FDE047" />
+                <item android:offset="1.0" android:color="#D97706" />
+            </gradient>
+        </aapt:attr>
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="18"
+                android:endX="54"
+                android:endY="82"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#E60284C7" />
+                <item android:offset="1.0" android:color="#E60F172A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <path
+        android:fillColor="#FDE047"
+        android:pathData="M34,40 h3 v24 h-3 Z M40,40 h2 v24 h-2 Z M45,40 h4 v24 h-4 Z M52,40 h2 v24 h-2 Z M57,40 h5 v24 h-5 Z M65,40 h2 v24 h-2 Z M70,40 h4 v24 h-4 Z" />
+
+    <path
+        android:pathData="M18,52 L90,52"
+        android:strokeWidth="2.5"
+        android:strokeColor="#38BDF8" />
+
+    <path
+        android:pathData="M54,52 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"
+        android:fillColor="#FFFFFF" />
+
+</vector>
