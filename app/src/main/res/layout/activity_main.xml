@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- معاينة الكاميرا المباشرة ملء الشاشة -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- إطار توجيه لمسح الباركود في المنتصف -->
+    <View
+        android:layout_width="280dp"
+        android:layout_height="180dp"
+        android:layout_centerInParent="true"
+        android:background="@drawable/scanner_box_border" />
+
+    <!-- زر فتح الإعدادات (في الأعلى) -->
+    <ImageButton
+        android:id="@+id/btnSettings"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_margin="16dp"
+        android:background="#80000000"
+        android:padding="10dp"
+        android:src="@android:drawable/ic_menu_preferences"
+        android:contentDescription="Settings" />
+
+    <!-- لوحة ضبط الـ IP والبورت (مخفية وتظهر عند الضغط على زر الإعدادات) -->
+    <LinearLayout
+        android:id="@+id/layoutSettings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:background="#E61E293B"
+        android:orientation="vertical"
+        android:padding="20dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="إعدادات الاتصال بالخادم المحاسبي"
+            android:textColor="#38BDF8"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/edtServerIp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="#0F172A"
+            android:hint="عنوان IP الكمبيوتر (مثال: 192.168.1.100)"
+            android:padding="10dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#94A3B8" />
+
+        <EditText
+            android:id="@+id/edtServerPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="#0F172A"
+            android:hint="البورت (افتراضي: 5005)"
+            android:inputType="number"
+            android:padding="10dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#94A3B8" />
+
+        <Button
+            android:id="@+id/btnSaveSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#0284C7"
+            android:text="حفظ الإعدادات"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- بطاقة الحالة والنتيجة السريعة في الأسفل -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:background="#CC0F172A"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/txtLastCode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="وجه الكاميرا نحو أي باركود..."
+            android:textColor="#F8FAFC"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textAlignment="center" />
+
+        <TextView
+            android:id="@+id/txtStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="جاهز للإرسال الفوري لبورت 5005 ⚡"
+            android:textColor="#4ADE80"
+            android:textSize="14sp"
+            android:textAlignment="center" />
+    </LinearLayout>
+
+</RelativeLayout>
