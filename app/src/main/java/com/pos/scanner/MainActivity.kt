@@ -30,8 +30,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
-
-    // عناصر الواجهة
     private lateinit var previewView: PreviewView
     private lateinit var dotConnectionStatus: View
     private lateinit var txtConnectionStatus: TextView
@@ -45,12 +43,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTestConnection: Button
     private lateinit var txtTestResult: TextView
     private lateinit var btnSaveSettings: Button
-
     private lateinit var txtItemName: TextView
     private lateinit var txtItemDetails: TextView
     private lateinit var txtStatusBadge: TextView
-
-    // إعدادات والشبكة
     private lateinit var prefs: SharedPreferences
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -58,48 +53,36 @@ class MainActivity : AppCompatActivity() {
         .writeTimeout(2, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
         .build()
-
     private var camera: Camera? = null
     private var isTorchOn = false
-
     private var lastScannedCode: String? = null
     private var lastScanTime: Long = 0L
     private var isFrameClear: Boolean = true
     private var emptyFramesCount: Int = 0
-
     private val offlineQueue = mutableListOf<String>()
     private var isProcessingQueue = false
-
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private var isServerConnected = false
-
     private var toneGenerator: ToneGenerator? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         try {
             toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
-
         initViews()
         loadOfflineQueue()
         loadSettings()
-
         if (allPermissionsGranted()) {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
         }
-
         startHeartbeat()
     }
-
     private fun initViews() {
         previewView = findViewById(R.id.previewView)
         dotConnectionStatus = findViewById(R.id.dotConnectionStatus)
@@ -114,20 +97,15 @@ class MainActivity : AppCompatActivity() {
         btnTestConnection = findViewById(R.id.btnTestConnection)
         txtTestResult = findViewById(R.id.txtTestResult)
         btnSaveSettings = findViewById(R.id.btnSaveSettings)
-
         txtItemName = findViewById(R.id.txtItemName)
         txtItemDetails = findViewById(R.id.txtItemDetails)
         txtStatusBadge = findViewById(R.id.txtStatusBadge)
-
         btnTorch.setOnClickListener { toggleTorch() }
-
         btnSettings.setOnClickListener {
             layoutSettings.visibility = if (layoutSettings.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             txtTestResult.visibility = View.GONE
         }
-
         btnTestConnection.setOnClickListener { testServerConnection() }
-
         btnSaveSettings.setOnClickListener {
             val ip = edtServerIp.text.toString().trim()
             val port = edtServerPort.text.toString().trim()
@@ -136,22 +114,18 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "تم حفظ الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
             checkServerStatus()
         }
-
         setDotColor("#EF4444")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
     }
-
     private fun loadSettings() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
         edtServerPort.setText(prefs.getString("server_port", "5005"))
     }
-
     private fun getServerUrl(): String {
         val ip = prefs.getString("server_ip", "192.168.1.100")?.trim() ?: "192.168.1.100"
         val port = prefs.getString("server_port", "5005")?.trim() ?: "5005"
         return "http://$ip:$port"
     }
-
     private fun setDotColor(colorHex: String) {
         val shape = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -159,7 +133,6 @@ class MainActivity : AppCompatActivity() {
         }
         dotConnectionStatus.background = shape
     }
-
     private fun setBadgeStyle(bgColorHex: String, textColorHex: String, strokeColorHex: String) {
         val shape = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
@@ -170,7 +143,6 @@ class MainActivity : AppCompatActivity() {
         txtStatusBadge.background = shape
         txtStatusBadge.setTextColor(Color.parseColor(textColorHex))
     }
-
     private fun startHeartbeat() {
         heartbeatHandler.post(object : Runnable {
             override fun run() {
@@ -179,16 +151,13 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
     private fun checkServerStatus() {
         val testUrl = "${getServerUrl()}/api/scan"
         val request = Request.Builder().url(testUrl).get().build()
-
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 updateConnectionUi(false)
             }
-
             override fun onResponse(call: Call, response: Response) {
                 val connected = response.code in 200..499
                 updateConnectionUi(connected)
@@ -198,7 +167,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
     private fun updateConnectionUi(connected: Boolean) {
         isServerConnected = connected
         runOnUiThread {
@@ -213,16 +181,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun testServerConnection() {
         txtTestResult.visibility = View.VISIBLE
         txtTestResult.text = "جاري فحص الاتصال..."
         txtTestResult.setTextColor(Color.parseColor("#38BDF8"))
-
         val ip = edtServerIp.text.toString().trim()
         val port = edtServerPort.text.toString().trim()
         val testUrl = "http://$ip:$port/api/scan"
-
         val request = Request.Builder().url(testUrl).get().build()
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -231,7 +196,6 @@ class MainActivity : AppCompatActivity() {
                     txtTestResult.setTextColor(Color.parseColor("#EF4444"))
                 }
             }
-
             override fun onResponse(call: Call, response: Response) {
                 runOnUiThread {
                     txtTestResult.text = "✅ تم الاتصال بنجاح بخادم الأوائل!"
@@ -240,7 +204,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -248,15 +211,12 @@ class MainActivity : AppCompatActivity() {
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-
             val scanner = BarcodeScanning.getClient()
             val cameraExecutor = Executors.newSingleThreadExecutor()
-
             val imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 val mediaImage = imageProxy.image
                 if (mediaImage != null) {
@@ -264,7 +224,6 @@ class MainActivity : AppCompatActivity() {
                     scanner.process(image)
                         .addOnSuccessListener { barcodes ->
                             val now = System.currentTimeMillis()
-
                             if (barcodes.isEmpty()) {
                                 emptyFramesCount++
                                 if (emptyFramesCount >= 3) {
@@ -274,16 +233,13 @@ class MainActivity : AppCompatActivity() {
                                 emptyFramesCount = 0
                                 val barcode = barcodes[0]
                                 val code = barcode.rawValue ?: return@addOnSuccessListener
-
                                 val isDifferentCode = (code != lastScannedCode)
                                 val hasLeftAndReturned = (isFrameClear && (now - lastScanTime > 1200))
                                 val isCooldownPassed = (now - lastScanTime > 3500)
-
                                 if (isDifferentCode || hasLeftAndReturned || isCooldownPassed) {
                                     lastScannedCode = code
                                     lastScanTime = now
                                     isFrameClear = false
-
                                     onBarcodeDetected(code)
                                 }
                             }
@@ -295,17 +251,14 @@ class MainActivity : AppCompatActivity() {
                     imageProxy.close()
                 }
             }
-
             try {
                 cameraProvider.unbindAll()
                 camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-
         }, ContextCompat.getMainExecutor(this))
     }
-
     private fun toggleTorch() {
         val cam = camera ?: return
         if (cam.cameraInfo.hasFlashUnit()) {
@@ -316,14 +269,11 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "الفلاش غير متاح", Toast.LENGTH_SHORT).show()
         }
     }
-
     private fun onBarcodeDetected(code: String) {
         val targetUrl = "${getServerUrl()}/api/scan"
-
         val jsonPayload = JSONObject().apply { put("barcode", code) }
         val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder().url(targetUrl).post(requestBody).build()
-
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 addToOfflineQueue(code)
@@ -336,7 +286,6 @@ class MainActivity : AppCompatActivity() {
                     setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
                 }
             }
-
             override fun onResponse(call: Call, response: Response) {
                 val responseBody = response.body?.string() ?: ""
                 try {
@@ -344,7 +293,6 @@ class MainActivity : AppCompatActivity() {
                     val isFound = resJson.optBoolean("found", true)
                     val itemName = resJson.optString("item_name", resJson.optString("name", "صنف: $code"))
                     val itemPrice = resJson.optString("price", "")
-
                     runOnUiThread {
                         if (response.isSuccessful && isFound) {
                             playToneSuccess()
@@ -382,7 +330,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
     private fun addToOfflineQueue(code: String) {
         synchronized(offlineQueue) {
             if (!offlineQueue.contains(code)) {
@@ -392,23 +339,19 @@ class MainActivity : AppCompatActivity() {
         }
         updateQueueUi()
     }
-
     private fun processOfflineQueue() {
         if (isProcessingQueue || offlineQueue.isEmpty()) return
         isProcessingQueue = true
-
         val queueCopy: List<String>
         synchronized(offlineQueue) {
             queueCopy = ArrayList(offlineQueue)
         }
-
         Executors.newSingleThreadExecutor().execute {
             for (code in queueCopy) {
                 val targetUrl = "${getServerUrl()}/api/scan"
                 val jsonPayload = JSONObject().apply { put("barcode", code) }
                 val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder().url(targetUrl).post(requestBody).build()
-
                 try {
                     val response = httpClient.newCall(request).execute()
                     if (response.isSuccessful) {
@@ -425,7 +368,6 @@ class MainActivity : AppCompatActivity() {
             updateQueueUi()
         }
     }
-
     private fun updateQueueUi() {
         runOnUiThread {
             if (offlineQueue.isEmpty()) {
@@ -436,12 +378,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun saveOfflineQueue() {
         val jsonArray = JSONArray(offlineQueue)
         prefs.edit().putString("offline_queue_data", jsonArray.toString()).apply()
     }
-
     private fun loadOfflineQueue() {
         val data = prefs.getString("offline_queue_data", null) ?: return
         try {
@@ -455,19 +395,15 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
     }
-
     private fun playToneSuccess() {
         try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (e: Exception) {}
     }
-
     private fun playToneWarning() {
         try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 200) } catch (e: Exception) {}
     }
-
     private fun playToneError() {
         try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 300) } catch (e: Exception) {}
     }
-
     private fun vibrateSuccess() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -476,7 +412,6 @@ class MainActivity : AppCompatActivity() {
             vibrator?.vibrate(60)
         }
     }
-
     private fun vibrateWarning() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         val pattern = longArrayOf(0, 100, 80, 100)
@@ -486,7 +421,6 @@ class MainActivity : AppCompatActivity() {
             vibrator?.vibrate(pattern, -1)
         }
     }
-
     private fun vibrateError() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         val pattern = longArrayOf(0, 250, 100, 250)
@@ -496,11 +430,9 @@ class MainActivity : AppCompatActivity() {
             vibrator?.vibrate(pattern, -1)
         }
     }
-
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
         this, Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
-
     override fun onDestroy() {
         super.onDestroy()
         heartbeatHandler.removeCallbacksAndMessages(null)
