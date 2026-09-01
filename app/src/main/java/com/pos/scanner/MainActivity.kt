@@ -152,6 +152,9 @@ class MainActivity : AppCompatActivity() {
             // يطلبه زرُّ الباركود في الموقع: يُظهر مستطيلَ الكاميرا فوق الموقع لخانةٍ محدّدة
             @android.webkit.JavascriptInterface
             fun scanToField(fieldId: String) { runOnUiThread { startSiteScan(fieldId) } }
+            // يناديه الموقعُ بعد نجاحِ الصنف: أغلقِ الكاميرا (المسحُ اكتمل بنجاح)
+            @android.webkit.JavascriptInterface
+            fun closeScan() { runOnUiThread { if (scanForSite) { playToneSuccess(); stopSiteScan() } } }
         }, "AndroidApp")
     }
 
@@ -160,49 +163,58 @@ class MainActivity : AppCompatActivity() {
         scanForSite = true
         scanSiteField = fieldId
         lastScannedCode = null; lastScanTime = 0L; isFrameClear = true
-        // ارفع معاينةَ الكاميرا (previewView) فوق كلِّ شيء + طبقةَ الإطارِ الأخضرِ وزرِّ الإلغاء
-        previewView.visibility = View.VISIBLE
-        previewView.bringToFront()
+        // صغّرْ معاينةَ الكاميرا إلى مستطيلٍ في الوسط (لا ملءَ الشاشة) وارفعها فوق الموقع
+        val lp = previewView.layoutParams as android.widget.RelativeLayout.LayoutParams
+        lp.width = dp(300); lp.height = dp(200)
+        lp.addRule(android.widget.RelativeLayout.CENTER_IN_PARENT, android.widget.RelativeLayout.TRUE)
+        previewView.layoutParams = lp
+        // الطبقةُ المعتّمةُ أوّلاً فوق الموقع، ثمّ الكاميرا فوقها (فتظهرُ داخل الإطار)
         val ov = overlayScan ?: buildScanOverlay().also { overlayScan = it }
         ov.visibility = View.VISIBLE
         ov.bringToFront()
+        previewView.visibility = View.VISIBLE
+        previewView.bringToFront()
     }
 
     private fun stopSiteScan() {
         scanForSite = false; scanSiteField = ""
         overlayScan?.visibility = View.GONE
-        // أعِد الموقعَ فوق الكاميرا (نبقى داخل الموقع)
+        // أعِد الكاميرا لملءِ الشاشة (لوضعِ الماسح-للكمبيوتر) وأعِد الموقعَ للأمام
+        val lp = previewView.layoutParams as android.widget.RelativeLayout.LayoutParams
+        lp.width = -1; lp.height = -1
+        previewView.layoutParams = lp
         web?.bringToFront()
     }
 
-    /** يبني طبقةَ الإطارِ الأخضرِ (منطقةُ القراءة) وزرِّ الإلغاء — بخلفيّةٍ شفّافةٍ لترى الكاميرا. */
+    /** طبقةٌ شفّافةٌ فوق الكاميرا: إطارٌ أخضرُ (منطقةُ القراءة) + تلميحٌ + زرُّ إلغاء. */
     private fun buildScanOverlay(): View {
         val fl = android.widget.FrameLayout(this)
-        fl.setBackgroundColor(Color.parseColor("#66000000"))   // تعتيمٌ خفيفٌ نرى الكاميرا خلفه
+        fl.setBackgroundColor(Color.parseColor("#CC0A1420"))   // تعتيمُ ما حولَ المستطيل
         fl.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
+        // الإطارُ الأخضرُ أكبرُ قليلاً من الكاميرا (يحيطُ بها فتبقى حدودُه ظاهرة)
         val frame = View(this)
-        val fp = android.widget.FrameLayout.LayoutParams(dp(280), dp(180))
+        val fp = android.widget.FrameLayout.LayoutParams(dp(310), dp(210))
         fp.gravity = android.view.Gravity.CENTER
         frame.layoutParams = fp
         frame.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE; cornerRadius = dp(14).toFloat()
             setStroke(dp(3), Color.parseColor("#26D07C")); setColor(Color.TRANSPARENT)
         }
+        val hint = TextView(this)
+        hint.text = "وجّه الكاميرا نحو الباركود"
+        hint.setTextColor(Color.WHITE); hint.textSize = 15f
+        val hp = android.widget.FrameLayout.LayoutParams(-2, -2)
+        hp.gravity = android.view.Gravity.CENTER_HORIZONTAL
+        hp.topMargin = dp(90)
+        hint.layoutParams = hp
         val close = Button(this)
         close.text = "إلغاء"; close.setTextColor(Color.WHITE)
         close.setBackgroundColor(Color.parseColor("#7F1D1D"))
         val cp = android.widget.FrameLayout.LayoutParams(-2, dp(44))
         cp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
-        cp.bottomMargin = dp(36)
+        cp.bottomMargin = dp(60)
         close.layoutParams = cp
         close.setOnClickListener { stopSiteScan() }
-        val hint = TextView(this)
-        hint.text = "وجّه الكاميرا نحو الباركود"
-        hint.setTextColor(Color.WHITE); hint.textSize = 15f
-        val hp = android.widget.FrameLayout.LayoutParams(-2, -2)
-        hp.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-        hp.topMargin = dp(48)
-        hint.layoutParams = hp
         fl.addView(frame); fl.addView(hint); fl.addView(close)
         (window.decorView as android.view.ViewGroup).addView(fl)
         return fl
@@ -439,15 +451,15 @@ class MainActivity : AppCompatActivity() {
             handleLinkQR(code)
             return
         }
-        // 📲 وضعُ الموقع: نحقنُ الباركودَ في خانةِ الموقع (jawwal) ونُخفي المستطيل — لا نرسلُ للكمبيوتر.
+        // 📲 وضعُ الموقع: نحقنُ الباركودَ في خانةِ الموقع (jawwal). لا نُغلقُ الكاميرا هنا —
+        //   الموقعُ هو مَن يقرّر: صنفٌ موجودٌ ⇒ ينادي AndroidApp.closeScan() فنُغلق؛ غيرُ موجودٍ ⇒ تبقى مفتوحةً للمسح الصحيح.
         if (scanForSite) {
             val field = scanSiteField
             runOnUiThread {
-                playToneSuccess(); vibrateSuccess()
+                vibrateSuccess()
                 val safe = code.replace("\\", "\\\\").replace("'", "\\'")
                 val fid = field.replace("\\", "\\\\").replace("'", "\\'")
                 web?.evaluateJavascript("window.awaelScanInject && window.awaelScanInject('$safe','$fid');", null)
-                stopSiteScan()
             }
             return
         }
