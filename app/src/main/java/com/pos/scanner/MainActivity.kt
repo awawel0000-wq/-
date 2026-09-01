@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSettings: ImageButton
     private lateinit var layoutPendingQueue: LinearLayout
     private lateinit var txtPendingCount: TextView
+    private lateinit var bottomBar: LinearLayout
     private lateinit var layoutSettings: LinearLayout
     private lateinit var edtServerIp: EditText
     private lateinit var edtServerPort: EditText
@@ -114,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         btnSettings = findViewById(R.id.btnSettings)
         layoutPendingQueue = findViewById(R.id.layoutPendingQueue)
         txtPendingCount = findViewById(R.id.txtPendingCount)
+        bottomBar = findViewById(R.id.bottomBar)
         // ضغطةٌ مطوّلةٌ على شريطِ المسحاتِ المعلّقة ⇒ مسحُ القائمةِ (للطوارئ إن علقت)
         layoutPendingQueue.setOnLongClickListener {
             android.app.AlertDialog.Builder(this)
@@ -269,6 +271,15 @@ class MainActivity : AppCompatActivity() {
         btnSite?.visibility = View.VISIBLE
         btnSettings.visibility = View.VISIBLE
         btnTorch.visibility = View.VISIBLE
+        // إصلاحُ الطبقات: الـ web كان مرفوعاً foreground فوق المستطيلِ والشريطِ السفلي.
+        // نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
+        previewView.bringToFront()                       // الكاميرا خلفية
+        (findViewById<View>(R.id.scanBox))?.bringToFront() // المستطيلُ الأخضرُ الثابت
+        bottomBar.bringToFront()                          // شريطُ البياناتِ السفلي
+        btnSite?.bringToFront(); btnSettings.bringToFront(); btnTorch.bringToFront()
+        layoutPendingQueue.bringToFront()
+        val root = w.parent as? android.view.ViewGroup
+        root?.requestLayout(); root?.invalidate()          // إجبارُ إعادةِ الرسمِ فوراً
     }
 
     private fun loadSettings() {

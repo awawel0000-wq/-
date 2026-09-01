@@ -12,6 +12,7 @@
 
     <!-- إطار توجيه لمسح الباركود في المنتصف -->
     <View
+        android:id="@+id/scanBox"
         android:layout_width="280dp"
         android:layout_height="180dp"
         android:layout_centerInParent="true"
