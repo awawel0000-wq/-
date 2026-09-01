@@ -25,7 +25,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -226,30 +225,8 @@ class MainActivity : AppCompatActivity() {
                 s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-            // نفتح الموقع عبر https (منفذ 5443) — اتصالٌ آمنٌ تعمل معه الكاميرا.
-            // ونقبل الشهادةَ الذاتيّةَ للسيرفر (شهادة برنامجك أنت، آمنة على شبكتك المحليّة).
-            w.webViewClient = object : android.webkit.WebViewClient() {
-                override fun onReceivedSslError(view: android.webkit.WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
-                    handler.proceed()   // نثق بشهادة السيرفر المحليّ الخاصّ بالبرنامج
-                }
-            }
-            // منح صلاحية الكاميرا لصفحة الموقع (الماسح الداخليّ يحتاجها)
-            w.webChromeClient = object : android.webkit.WebChromeClient() {
-                override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
-                    runOnUiThread {
-                        val wantsCam = request.resources.any { it == android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE }
-                        if (wantsCam) {
-                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE))
-                            } else {
-                                ActivityCompat.requestPermissions(this@MainActivity, arrayOf(Manifest.permission.CAMERA), 1001)
-                                request.deny()
-                            }
-                        } else request.grant(request.resources)
-                    }
-                }
-            }
-            w.loadUrl("$SECURE_ORIGIN/static/m/jawwal.html")
+            w.webViewClient = android.webkit.WebViewClient()
+            w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
             siteLoaded = true
         }
         w.visibility = View.VISIBLE
@@ -269,34 +246,6 @@ class MainActivity : AppCompatActivity() {
         btnTorch.visibility = View.VISIBLE
     }
 
-    /** يجلب المسار من السيرفر الحقيقيّ ويعيده كأنّه من الأصل الآمن (مع حفظ كوكيز الجلسة). */
-    private fun proxyToServer(method: String, path: String, headers: Map<String, String>?): android.webkit.WebResourceResponse? {
-        val base = getServerUrl()
-        return try {
-            val cm = android.webkit.CookieManager.getInstance()
-            val rb = Request.Builder().url(base + path)
-            headers?.forEach { (k, v) -> try { rb.header(k, v) } catch (_: Exception) {} }
-            cm.getCookie(base)?.let { if (it.isNotBlank()) rb.header("Cookie", it) }
-            if (method.equals("POST", true) || method.equals("PUT", true)) {
-                rb.method(method, ByteArray(0).toRequestBody(null))  // الجسم يأتي عبر JS fetch عادةً
-            } else rb.get()
-            // عميلُ http بلا مهلةٍ قصيرة (صفحات الموقع قد تكبر)
-            val client = OkHttpClient.Builder()
-                .connectTimeout(8, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS)
-                .followRedirects(true).build()
-            val resp = client.newCall(rb.build()).execute()
-            // احفظ أيّ Set-Cookie
-            resp.headers("Set-Cookie").forEach { sc -> try { cm.setCookie(base, sc) } catch (_: Exception) {} }
-            try { cm.flush() } catch (_: Exception) {}
-            val bytes = resp.body?.bytes() ?: ByteArray(0)
-            val ctypeRaw = resp.header("Content-Type") ?: "application/octet-stream"
-            val mime = ctypeRaw.substringBefore(';').trim().ifEmpty { "application/octet-stream" }
-            val enc = Regex("charset=([^;]+)", RegexOption.IGNORE_CASE).find(ctypeRaw)?.groupValues?.get(1)?.trim() ?: "utf-8"
-            val respHeaders = hashMapOf("Access-Control-Allow-Origin" to "*")
-            android.webkit.WebResourceResponse(mime, enc, if (resp.code > 0) resp.code else 200,
-                resp.message.ifEmpty { "OK" }, respHeaders, ByteArrayInputStream(bytes))
-        } catch (e: Exception) { null }
-    }
     private fun loadSettings() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
         edtServerPort.setText(prefs.getString("server_port", "5005"))
