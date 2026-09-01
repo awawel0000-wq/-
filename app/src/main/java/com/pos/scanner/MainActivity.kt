@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private var scanForSite = false
     private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
     private var overlayScan: View? = null
+    private var scanFrame: View? = null      // الإطارُ الأخضر (يتحرّك مع الكاميرا عند السحب)
+    private var scanDX = 0f; private var scanDY = 0f   // إزاحةُ المستطيلِ الحاليّة
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -168,8 +170,11 @@ class MainActivity : AppCompatActivity() {
         lp.width = dp(300); lp.height = dp(200)
         lp.addRule(android.widget.RelativeLayout.CENTER_IN_PARENT, android.widget.RelativeLayout.TRUE)
         previewView.layoutParams = lp
-        // الطبقةُ المعتّمةُ أوّلاً فوق الموقع، ثمّ الكاميرا فوقها (فتظهرُ داخل الإطار)
+        // ابدأ من الوسط (صفّر أيّ إزاحةٍ سابقة)
+        scanDX = 0f; scanDY = 0f
+        previewView.translationX = 0f; previewView.translationY = 0f
         val ov = overlayScan ?: buildScanOverlay().also { overlayScan = it }
+        scanFrame?.translationX = 0f; scanFrame?.translationY = 0f
         ov.visibility = View.VISIBLE
         ov.bringToFront()
         previewView.visibility = View.VISIBLE
@@ -189,7 +194,7 @@ class MainActivity : AppCompatActivity() {
     /** طبقةٌ شفّافةٌ فوق الكاميرا: إطارٌ أخضرُ (منطقةُ القراءة) + تلميحٌ + زرُّ إلغاء. */
     private fun buildScanOverlay(): View {
         val fl = android.widget.FrameLayout(this)
-        fl.setBackgroundColor(Color.parseColor("#CC0A1420"))   // تعتيمُ ما حولَ المستطيل
+        fl.setBackgroundColor(Color.TRANSPARENT)   // بلا تعتيم — يبقى الموقعُ ظاهراً خلفَ المستطيل
         fl.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
         // الإطارُ الأخضرُ أكبرُ قليلاً من الكاميرا (يحيطُ بها فتبقى حدودُه ظاهرة)
         val frame = View(this)
@@ -200,22 +205,40 @@ class MainActivity : AppCompatActivity() {
             shape = GradientDrawable.RECTANGLE; cornerRadius = dp(14).toFloat()
             setStroke(dp(3), Color.parseColor("#26D07C")); setColor(Color.TRANSPARENT)
         }
-        val hint = TextView(this)
-        hint.text = "وجّه الكاميرا نحو الباركود"
-        hint.setTextColor(Color.WHITE); hint.textSize = 15f
-        val hp = android.widget.FrameLayout.LayoutParams(-2, -2)
-        hp.gravity = android.view.Gravity.CENTER_HORIZONTAL
-        hp.topMargin = dp(90)
-        hint.layoutParams = hp
+        scanFrame = frame
+        // سحبُ الإطارِ يحرّكه هو والكاميرا معاً إلى أيِّ مكان
+        var sx = 0f; var sy = 0f; var bx = 0f; var by = 0f
+        frame.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                android.view.MotionEvent.ACTION_DOWN -> { sx = ev.rawX; sy = ev.rawY; bx = scanDX; by = scanDY; true }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    scanDX = bx + (ev.rawX - sx); scanDY = by + (ev.rawY - sy)
+                    frame.translationX = scanDX; frame.translationY = scanDY
+                    previewView.translationX = scanDX; previewView.translationY = scanDY
+                    true
+                }
+                else -> true
+            }
+        }
+        // زرُّ الكشّاف (الإضاءة) — صغيرٌ داخل زاويةِ المستطيل
+        val torch = Button(this)
+        torch.text = "💡"; torch.textSize = 16f
+        torch.setBackgroundColor(Color.parseColor("#CC1C6FBF"))
+        val tp = android.widget.FrameLayout.LayoutParams(dp(46), dp(40))
+        tp.gravity = android.view.Gravity.CENTER
+        tp.topMargin = dp(150)   // أسفلَ المستطيل بقليل
+        torch.layoutParams = tp
+        torch.setOnClickListener { toggleTorch() }
+        // زرُّ الإلغاء
         val close = Button(this)
         close.text = "إلغاء"; close.setTextColor(Color.WHITE)
-        close.setBackgroundColor(Color.parseColor("#7F1D1D"))
-        val cp = android.widget.FrameLayout.LayoutParams(-2, dp(44))
+        close.setBackgroundColor(Color.parseColor("#CC7F1D1D"))
+        val cp = android.widget.FrameLayout.LayoutParams(-2, dp(42))
         cp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
-        cp.bottomMargin = dp(60)
+        cp.bottomMargin = dp(50)
         close.layoutParams = cp
         close.setOnClickListener { stopSiteScan() }
-        fl.addView(frame); fl.addView(hint); fl.addView(close)
+        fl.addView(frame); fl.addView(torch); fl.addView(close)
         (window.decorView as android.view.ViewGroup).addView(fl)
         return fl
     }
