@@ -158,11 +158,28 @@ class MainActivity : AppCompatActivity() {
             s.domStorageEnabled = true
             s.useWideViewPort = true
             s.loadWithOverviewMode = true
+            s.mediaPlaybackRequiresUserGesture = false   // تشغيل الكاميرا بلا لمسة إضافيّة
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
             w.webViewClient = android.webkit.WebViewClient()
+            // منح صلاحية الكاميرا لصفحة الموقع (الماسح الداخليّ يحتاجها)
+            w.webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
+                    runOnUiThread {
+                        val wantsCam = request.resources.any { it == android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE }
+                        if (wantsCam) {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                            } else {
+                                ActivityCompat.requestPermissions(this@MainActivity, arrayOf(Manifest.permission.CAMERA), 1001)
+                                request.deny()
+                            }
+                        } else request.grant(request.resources)
+                    }
+                }
+            }
             w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
             siteLoaded = true
         }
