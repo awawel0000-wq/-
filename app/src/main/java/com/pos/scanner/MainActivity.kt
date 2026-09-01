@@ -25,6 +25,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -68,6 +69,10 @@ class MainActivity : AppCompatActivity() {
     private var web: android.webkit.WebView? = null
     private var btnSite: Button? = null
     private var siteLoaded = false
+    // وضعُ المسح للموقع: عند طلبِ الموقعِ باركوداً، نُظهرُ الكاميرا فوقه ونحقنُ النتيجةَ فيه بدلاً من الكمبيوتر
+    private var scanForSite = false
+    private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
+    private var overlayScan: View? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -141,12 +146,70 @@ class MainActivity : AppCompatActivity() {
         web = findViewById(R.id.web)
         btnSite = findViewById(R.id.btnSite)
         btnSite?.setOnClickListener { openSite() }
-        // جسرٌ يتيح لزرٍّ داخل الموقع (jawwal) العودة إلى الماسح الخارجيّ
+        // جسرٌ بين الموقع (jawwal) والتطبيق
         web?.addJavascriptInterface(object {
             @android.webkit.JavascriptInterface
             fun backToScanner() { runOnUiThread { closeSite() } }
+            // يطلبه زرُّ الباركود في الموقع: يُظهر مستطيلَ الكاميرا فوق الموقع لخانةٍ محدّدة
+            @android.webkit.JavascriptInterface
+            fun scanToField(fieldId: String) { runOnUiThread { startSiteScan(fieldId) } }
         }, "AndroidApp")
     }
+
+    /** يُظهر مستطيلَ الكاميرا (الماسح السريع نفسه) فوق الموقع، لخانةٍ محدّدة. */
+    private fun startSiteScan(fieldId: String) {
+        scanForSite = true
+        scanSiteField = fieldId
+        lastScannedCode = null; lastScanTime = 0L; isFrameClear = true
+        // ارفع معاينةَ الكاميرا (previewView) فوق كلِّ شيء + طبقةَ الإطارِ الأخضرِ وزرِّ الإلغاء
+        previewView.visibility = View.VISIBLE
+        previewView.bringToFront()
+        val ov = overlayScan ?: buildScanOverlay().also { overlayScan = it }
+        ov.visibility = View.VISIBLE
+        ov.bringToFront()
+    }
+
+    private fun stopSiteScan() {
+        scanForSite = false; scanSiteField = ""
+        overlayScan?.visibility = View.GONE
+        // أعِد الموقعَ فوق الكاميرا (نبقى داخل الموقع)
+        web?.bringToFront()
+    }
+
+    /** يبني طبقةَ الإطارِ الأخضرِ (منطقةُ القراءة) وزرِّ الإلغاء — بخلفيّةٍ شفّافةٍ لترى الكاميرا. */
+    private fun buildScanOverlay(): View {
+        val fl = android.widget.FrameLayout(this)
+        fl.setBackgroundColor(Color.parseColor("#66000000"))   // تعتيمٌ خفيفٌ نرى الكاميرا خلفه
+        fl.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
+        val frame = View(this)
+        val fp = android.widget.FrameLayout.LayoutParams(dp(280), dp(180))
+        fp.gravity = android.view.Gravity.CENTER
+        frame.layoutParams = fp
+        frame.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE; cornerRadius = dp(14).toFloat()
+            setStroke(dp(3), Color.parseColor("#26D07C")); setColor(Color.TRANSPARENT)
+        }
+        val close = Button(this)
+        close.text = "إلغاء"; close.setTextColor(Color.WHITE)
+        close.setBackgroundColor(Color.parseColor("#7F1D1D"))
+        val cp = android.widget.FrameLayout.LayoutParams(-2, dp(44))
+        cp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
+        cp.bottomMargin = dp(36)
+        close.layoutParams = cp
+        close.setOnClickListener { stopSiteScan() }
+        val hint = TextView(this)
+        hint.text = "وجّه الكاميرا نحو الباركود"
+        hint.setTextColor(Color.WHITE); hint.textSize = 15f
+        val hp = android.widget.FrameLayout.LayoutParams(-2, -2)
+        hp.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+        hp.topMargin = dp(48)
+        hint.layoutParams = hp
+        fl.addView(frame); fl.addView(hint); fl.addView(close)
+        (window.decorView as android.view.ViewGroup).addView(fl)
+        return fl
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     /** يفتح الموقع (jawwal) داخل التطبيق فوق شاشة الماسح. */
     @android.annotation.SuppressLint("SetJavaScriptEnabled")
@@ -163,7 +226,13 @@ class MainActivity : AppCompatActivity() {
                 s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-            w.webViewClient = android.webkit.WebViewClient()
+            // نفتح الموقع عبر https (منفذ 5443) — اتصالٌ آمنٌ تعمل معه الكاميرا.
+            // ونقبل الشهادةَ الذاتيّةَ للسيرفر (شهادة برنامجك أنت، آمنة على شبكتك المحليّة).
+            w.webViewClient = object : android.webkit.WebViewClient() {
+                override fun onReceivedSslError(view: android.webkit.WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
+                    handler.proceed()   // نثق بشهادة السيرفر المحليّ الخاصّ بالبرنامج
+                }
+            }
             // منح صلاحية الكاميرا لصفحة الموقع (الماسح الداخليّ يحتاجها)
             w.webChromeClient = object : android.webkit.WebChromeClient() {
                 override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
@@ -180,7 +249,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
+            w.loadUrl("$SECURE_ORIGIN/static/m/jawwal.html")
             siteLoaded = true
         }
         w.visibility = View.VISIBLE
@@ -198,6 +267,35 @@ class MainActivity : AppCompatActivity() {
         btnSite?.visibility = View.VISIBLE
         btnSettings.visibility = View.VISIBLE
         btnTorch.visibility = View.VISIBLE
+    }
+
+    /** يجلب المسار من السيرفر الحقيقيّ ويعيده كأنّه من الأصل الآمن (مع حفظ كوكيز الجلسة). */
+    private fun proxyToServer(method: String, path: String, headers: Map<String, String>?): android.webkit.WebResourceResponse? {
+        val base = getServerUrl()
+        return try {
+            val cm = android.webkit.CookieManager.getInstance()
+            val rb = Request.Builder().url(base + path)
+            headers?.forEach { (k, v) -> try { rb.header(k, v) } catch (_: Exception) {} }
+            cm.getCookie(base)?.let { if (it.isNotBlank()) rb.header("Cookie", it) }
+            if (method.equals("POST", true) || method.equals("PUT", true)) {
+                rb.method(method, ByteArray(0).toRequestBody(null))  // الجسم يأتي عبر JS fetch عادةً
+            } else rb.get()
+            // عميلُ http بلا مهلةٍ قصيرة (صفحات الموقع قد تكبر)
+            val client = OkHttpClient.Builder()
+                .connectTimeout(8, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS)
+                .followRedirects(true).build()
+            val resp = client.newCall(rb.build()).execute()
+            // احفظ أيّ Set-Cookie
+            resp.headers("Set-Cookie").forEach { sc -> try { cm.setCookie(base, sc) } catch (_: Exception) {} }
+            try { cm.flush() } catch (_: Exception) {}
+            val bytes = resp.body?.bytes() ?: ByteArray(0)
+            val ctypeRaw = resp.header("Content-Type") ?: "application/octet-stream"
+            val mime = ctypeRaw.substringBefore(';').trim().ifEmpty { "application/octet-stream" }
+            val enc = Regex("charset=([^;]+)", RegexOption.IGNORE_CASE).find(ctypeRaw)?.groupValues?.get(1)?.trim() ?: "utf-8"
+            val respHeaders = hashMapOf("Access-Control-Allow-Origin" to "*")
+            android.webkit.WebResourceResponse(mime, enc, if (resp.code > 0) resp.code else 200,
+                resp.message.ifEmpty { "OK" }, respHeaders, ByteArrayInputStream(bytes))
+        } catch (e: Exception) { null }
     }
     private fun loadSettings() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
@@ -388,9 +486,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun onBarcodeDetected(code: String) {
         // 🔗 رمزُ ربطٍ (QR من شاشة /link في الكمبيوتر)؟ عالِجه كإعداداتٍ لا كباركودِ صنف.
-        //   الصيغة: awael://link?ip=..&port=..&sid=..  — يملأ العنوان ويتصل تلقائياً.
         if (code.startsWith("awael://link")) {
             handleLinkQR(code)
+            return
+        }
+        // 📲 وضعُ الموقع: نحقنُ الباركودَ في خانةِ الموقع (jawwal) ونُخفي المستطيل — لا نرسلُ للكمبيوتر.
+        if (scanForSite) {
+            val field = scanSiteField
+            runOnUiThread {
+                playToneSuccess(); vibrateSuccess()
+                val safe = code.replace("\\", "\\\\").replace("'", "\\'")
+                val fid = field.replace("\\", "\\\\").replace("'", "\\'")
+                web?.evaluateJavascript("window.awaelScanInject && window.awaelScanInject('$safe','$fid');", null)
+                stopSiteScan()
+            }
             return
         }
         val targetUrl = "${getServerUrl()}/api/scan"
