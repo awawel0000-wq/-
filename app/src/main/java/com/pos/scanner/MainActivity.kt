@@ -99,6 +99,13 @@ class MainActivity : AppCompatActivity() {
         }
         startHeartbeat()
     }
+    // بعد منحِ إذنِ الكاميرا أوّلَ مرّة: شغّلِ الكاميرا فوراً (بلا حاجةٍ لإغلاقِ التطبيقِ وفتحِه)
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1001 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startCamera()
+        }
+    }
     private fun initViews() {
         previewView = findViewById(R.id.previewView)
         dotConnectionStatus = findViewById(R.id.dotConnectionStatus)
@@ -107,6 +114,15 @@ class MainActivity : AppCompatActivity() {
         btnSettings = findViewById(R.id.btnSettings)
         layoutPendingQueue = findViewById(R.id.layoutPendingQueue)
         txtPendingCount = findViewById(R.id.txtPendingCount)
+        // ضغطةٌ مطوّلةٌ على شريطِ المسحاتِ المعلّقة ⇒ مسحُ القائمةِ (للطوارئ إن علقت)
+        layoutPendingQueue.setOnLongClickListener {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("مسح قائمة الانتظار")
+                .setMessage("حذفُ كلِّ المسحاتِ المعلّقة التي لم تُرسَل؟")
+                .setPositiveButton("مسح") { _, _ -> clearOfflineQueue() }
+                .setNegativeButton("إلغاء", null).show()
+            true
+        }
         layoutSettings = findViewById(R.id.layoutSettings)
         edtServerIp = findViewById(R.id.edtServerIp)
         edtServerPort = findViewById(R.id.edtServerPort)
@@ -247,6 +263,7 @@ class MainActivity : AppCompatActivity() {
     /** يعود من الموقع إلى شاشة الماسح. */
     private fun closeSite() {
         val w = web ?: return
+        if (scanForSite) stopSiteScan()   // احتياطاً: أوقفْ وضعَ مسح الموقع إن كان مفعّلاً
         w.visibility = View.GONE
         // عُدنا للماسح: أرجِع أزراره
         btnSite?.visibility = View.VISIBLE
@@ -523,12 +540,19 @@ class MainActivity : AppCompatActivity() {
     }
     private fun addToOfflineQueue(code: String) {
         synchronized(offlineQueue) {
-            if (!offlineQueue.contains(code)) {
-                offlineQueue.add(code)
-                saveOfflineQueue()
-            }
+            offlineQueue.add(code)   // نسمحُ بالتكرار (نفسُ الصنفِ مرّتين = كميّتان)
+            // حدٌّ أقصى للقائمةِ منعاً لتضخّمِها بلا نهاية — نُسقِطُ الأقدم
+            while (offlineQueue.size > 500) offlineQueue.removeAt(0)
+            saveOfflineQueue()
         }
         updateQueueUi()
+    }
+    /** مسحُ قائمةِ الانتظارِ يدوياً (للطوارئ إن علقت). */
+    private fun clearOfflineQueue() {
+        synchronized(offlineQueue) { offlineQueue.clear(); saveOfflineQueue() }
+        isProcessingQueue = false
+        updateQueueUi()
+        Toast.makeText(this, "تم مسح قائمة الانتظار", Toast.LENGTH_SHORT).show()
     }
     private fun processOfflineQueue() {
         if (isProcessingQueue || offlineQueue.isEmpty()) return
@@ -539,25 +563,30 @@ class MainActivity : AppCompatActivity() {
         }
         val sid = prefs.getString("session_id", "default") ?: "default"
         Executors.newSingleThreadExecutor().execute {
-            for (code in queueCopy) {
-                val targetUrl = "${getServerUrl()}/api/scan"
-                val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
-                val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val request = Request.Builder().url(targetUrl).post(requestBody).build()
-                try {
-                    val response = httpClient.newCall(request).execute()
-                    if (response.isSuccessful) {
-                        synchronized(offlineQueue) {
-                            offlineQueue.remove(code)
-                            saveOfflineQueue()
+            // try/finally يضمنُ ألّا يعلقَ isProcessingQueue=true أبداً (كان سببَ توقّفِ الإرسالِ بعد انقطاعِ الكهرباء)
+            try {
+                for (code in queueCopy) {
+                    val targetUrl = "${getServerUrl()}/api/scan"
+                    val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
+                    val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val request = Request.Builder().url(targetUrl).post(requestBody).build()
+                    try {
+                        val response = httpClient.newCall(request).execute()
+                        val ok = response.isSuccessful
+                        try { response.close() } catch (_: Exception) {}
+                        if (ok) {
+                            synchronized(offlineQueue) { offlineQueue.remove(code); saveOfflineQueue() }
+                        } else {
+                            break   // السيرفرُ ردّ برفضٍ — نتوقّفُ ونعيدُ المحاولةَ لاحقاً (لا نحذف)
                         }
+                    } catch (e: Exception) {
+                        break   // شبكةٌ متقطّعة — نتوقّفُ ونعيدُ لاحقاً (القائمةُ محفوظة)
                     }
-                } catch (e: Exception) {
-                    break
                 }
+            } finally {
+                isProcessingQueue = false   // مهما حصل: نُفرِجُ عن القفل فلا يتعطّلُ الإرسالُ للأبد
+                updateQueueUi()
             }
-            isProcessingQueue = false
-            updateQueueUi()
         }
     }
     private fun updateQueueUi() {
@@ -641,6 +670,8 @@ class MainActivity : AppCompatActivity() {
     ) == PackageManager.PERMISSION_GRANTED
     // زرُّ الرجوع: إن كان الموقع مفتوحاً تنقّل داخله ثم عُد للماسح
     override fun onBackPressed() {
+        // إن كانت كاميرا المسح (وضع الموقع) مفتوحةً ⇒ أغلقها أوّلاً (وأوقفْ وضعَ المسح)
+        if (scanForSite) { stopSiteScan(); return }
         val w = web
         if (w != null && w.visibility == View.VISIBLE) { closeSite(); return }
         super.onBackPressed()
