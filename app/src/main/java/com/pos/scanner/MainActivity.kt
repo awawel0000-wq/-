@@ -73,7 +73,6 @@ class MainActivity : AppCompatActivity() {
     private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
     private var overlayScan: View? = null
     private var scanFrame: View? = null      // الإطارُ الأخضر (يتحرّك مع الكاميرا عند السحب)
-    private var scanDX = 0f; private var scanDY = 0f   // إزاحةُ المستطيلِ الحاليّة
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -160,45 +159,33 @@ class MainActivity : AppCompatActivity() {
         }, "AndroidApp")
     }
 
-    /** يُظهر مستطيلَ الكاميرا (الماسح السريع نفسه) فوق الموقع، لخانةٍ محدّدة. */
+    /** يُظهر الكاميرا (الماسح السريع) ملءَ الشاشة فوق الموقع — قراءةٌ سهلةٌ قويّة. */
     private fun startSiteScan(fieldId: String) {
         scanForSite = true
         scanSiteField = fieldId
         lastScannedCode = null; lastScanTime = 0L; isFrameClear = true
-        // صغّرْ معاينةَ الكاميرا إلى مستطيلٍ في الوسط (لا ملءَ الشاشة) وارفعها فوق الموقع
-        val lp = previewView.layoutParams as android.widget.RelativeLayout.LayoutParams
-        lp.width = dp(300); lp.height = dp(200)
-        lp.addRule(android.widget.RelativeLayout.CENTER_IN_PARENT, android.widget.RelativeLayout.TRUE)
-        previewView.layoutParams = lp
-        // ابدأ من الوسط (صفّر أيّ إزاحةٍ سابقة)
-        scanDX = 0f; scanDY = 0f
-        previewView.translationX = 0f; previewView.translationY = 0f
-        val ov = overlayScan ?: buildScanOverlay().also { overlayScan = it }
-        scanFrame?.translationX = 0f; scanFrame?.translationY = 0f
-        ov.visibility = View.VISIBLE
-        ov.bringToFront()
+        // الكاميرا ملءُ الشاشة أوّلاً، ثمّ الطبقةُ الشفّافةُ (الإطار+الأزرار) فوقها لتظهرَ الأزرار
         previewView.visibility = View.VISIBLE
         previewView.bringToFront()
+        val ov = overlayScan ?: buildScanOverlay().also { overlayScan = it }
+        ov.visibility = View.VISIBLE
+        ov.bringToFront()   // الطبقةُ فوق الكاميرا (شفّافةٌ فتظهرُ الكاميرا، والأزرارُ عليها)
     }
 
     private fun stopSiteScan() {
         scanForSite = false; scanSiteField = ""
         overlayScan?.visibility = View.GONE
-        // أعِد الكاميرا لملءِ الشاشة (لوضعِ الماسح-للكمبيوتر) وأعِد الموقعَ للأمام
-        val lp = previewView.layoutParams as android.widget.RelativeLayout.LayoutParams
-        lp.width = -1; lp.height = -1
-        previewView.layoutParams = lp
         web?.bringToFront()
     }
 
     /** طبقةٌ شفّافةٌ فوق الكاميرا: إطارٌ أخضرُ (منطقةُ القراءة) + تلميحٌ + زرُّ إلغاء. */
     private fun buildScanOverlay(): View {
         val fl = android.widget.FrameLayout(this)
-        fl.setBackgroundColor(Color.TRANSPARENT)   // بلا تعتيم — يبقى الموقعُ ظاهراً خلفَ المستطيل
+        fl.setBackgroundColor(Color.TRANSPARENT)   // شفّافٌ — الكاميرا ملءُ الشاشة خلفه
         fl.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
-        // الإطارُ الأخضرُ أكبرُ قليلاً من الكاميرا (يحيطُ بها فتبقى حدودُه ظاهرة)
+        // إطارٌ أخضرُ في الوسط — دليلُ التصويب فقط (لا يحدُّ القراءة؛ الماسح يقرأ ملءَ الشاشة)
         val frame = View(this)
-        val fp = android.widget.FrameLayout.LayoutParams(dp(310), dp(210))
+        val fp = android.widget.FrameLayout.LayoutParams(dp(300), dp(190))
         fp.gravity = android.view.Gravity.CENTER
         frame.layoutParams = fp
         frame.background = GradientDrawable().apply {
@@ -206,36 +193,22 @@ class MainActivity : AppCompatActivity() {
             setStroke(dp(3), Color.parseColor("#26D07C")); setColor(Color.TRANSPARENT)
         }
         scanFrame = frame
-        // سحبُ الإطارِ يحرّكه هو والكاميرا معاً إلى أيِّ مكان
-        var sx = 0f; var sy = 0f; var bx = 0f; var by = 0f
-        frame.setOnTouchListener { v, ev ->
-            when (ev.action) {
-                android.view.MotionEvent.ACTION_DOWN -> { sx = ev.rawX; sy = ev.rawY; bx = scanDX; by = scanDY; true }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    scanDX = bx + (ev.rawX - sx); scanDY = by + (ev.rawY - sy)
-                    frame.translationX = scanDX; frame.translationY = scanDY
-                    previewView.translationX = scanDX; previewView.translationY = scanDY
-                    true
-                }
-                else -> true
-            }
-        }
-        // زرُّ الكشّاف (الإضاءة) — صغيرٌ داخل زاويةِ المستطيل
+        // زرُّ الكشّاف (الإضاءة) — أعلى اليسار
         val torch = Button(this)
-        torch.text = "💡"; torch.textSize = 16f
+        torch.text = "💡"; torch.textSize = 18f
         torch.setBackgroundColor(Color.parseColor("#CC1C6FBF"))
-        val tp = android.widget.FrameLayout.LayoutParams(dp(46), dp(40))
-        tp.gravity = android.view.Gravity.CENTER
-        tp.topMargin = dp(150)   // أسفلَ المستطيل بقليل
+        val tp = android.widget.FrameLayout.LayoutParams(dp(52), dp(46))
+        tp.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        tp.topMargin = dp(40); tp.leftMargin = dp(16)
         torch.layoutParams = tp
         torch.setOnClickListener { toggleTorch() }
-        // زرُّ الإلغاء
+        // زرُّ الإلغاء — أسفل الوسط
         val close = Button(this)
         close.text = "إلغاء"; close.setTextColor(Color.WHITE)
         close.setBackgroundColor(Color.parseColor("#CC7F1D1D"))
-        val cp = android.widget.FrameLayout.LayoutParams(-2, dp(42))
+        val cp = android.widget.FrameLayout.LayoutParams(-2, dp(46))
         cp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
-        cp.bottomMargin = dp(50)
+        cp.bottomMargin = dp(48)
         close.layoutParams = cp
         close.setOnClickListener { stopSiteScan() }
         fl.addView(frame); fl.addView(torch); fl.addView(close)
