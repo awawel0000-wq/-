@@ -67,7 +67,6 @@ class MainActivity : AppCompatActivity() {
     // الموقع (jawwal) داخل التطبيق
     private var web: android.webkit.WebView? = null
     private var btnSite: Button? = null
-    private var btnBackScan: Button? = null
     private var siteLoaded = false
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,15 +125,27 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "تم حفظ الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
             checkServerStatus()
         }
+        // زر: أعد الربط بمسح رمز QR — يقفل اللوحة ويوجّه الكاميرا للرمز (تُلتقط تلقائياً)
+        findViewById<Button>(R.id.btnScanLink).setOnClickListener {
+            layoutSettings.visibility = View.GONE
+            txtItemName.text = "📷 وجّه الكاميرا لرمز الربط"
+            txtItemDetails.text = "امسح QR الجهاز الجديد — يقترن فوراً"
+            txtStatusBadge.text = "بانتظار رمز الربط…"
+            setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+            Toast.makeText(this, "وجّه الكاميرا نحو رمز الربط", Toast.LENGTH_LONG).show()
+        }
         setDotColor("#EF4444")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
 
-        // زرّا التنقّل بين الماسح والموقع
+        // زر الانتقال إلى الموقع
         web = findViewById(R.id.web)
         btnSite = findViewById(R.id.btnSite)
-        btnBackScan = findViewById(R.id.btnBackScan)
         btnSite?.setOnClickListener { openSite() }
-        btnBackScan?.setOnClickListener { closeSite() }
+        // جسرٌ يتيح لزرٍّ داخل الموقع (jawwal) العودة إلى الماسح الخارجيّ
+        web?.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface
+            fun backToScanner() { runOnUiThread { closeSite() } }
+        }, "AndroidApp")
     }
 
     /** يفتح الموقع (jawwal) داخل التطبيق فوق شاشة الماسح. */
@@ -156,19 +167,16 @@ class MainActivity : AppCompatActivity() {
             siteLoaded = true
         }
         w.visibility = View.VISIBLE
-        // نحن الآن داخل الموقع: أخفِ أزرار الماسح، وأظهِر زرَّ العودة الصغير فقط
+        // نحن الآن داخل الموقع: أخفِ أزرار الماسح (العودة تكون من زرٍّ داخل الموقع أو زرّ الرجوع)
         btnSite?.visibility = View.GONE
         btnSettings.visibility = View.GONE
         btnTorch.visibility = View.GONE
-        btnBackScan?.visibility = View.VISIBLE
     }
 
     /** يعود من الموقع إلى شاشة الماسح. */
     private fun closeSite() {
         val w = web ?: return
-        if (w.canGoBack()) { w.goBack(); return }
         w.visibility = View.GONE
-        btnBackScan?.visibility = View.GONE
         // عُدنا للماسح: أرجِع أزراره
         btnSite?.visibility = View.VISIBLE
         btnSettings.visibility = View.VISIBLE

@@ -129,6 +129,33 @@
             android:text="حفظ الإعدادات"
             android:textColor="#FFFFFF"
             android:textStyle="bold" />
+
+        <!-- فاصل -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="12dp"
+            android:background="#334155" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:textAlignment="center" />
+
+        <!-- زر: أعد الربط بمسح الباركود (QR) -->
+        <Button
+            android:id="@+id/btnScanLink"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#168568"
+            android:text="📷 مسح رمز الربط بالكاميرا"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <!-- شريط المسحات المعلقة -->
@@ -226,23 +253,5 @@
         android:layout_height="match_parent"
         android:visibility="gone" />
 
-    <!-- زر الرجوع من الموقع إلى الماسح — صغير في أعلى الشاشة (فوق الموقع) -->
-    <Button
-        android:id="@+id/btnBackScan"
-        android:layout_width="wrap_content"
-        android:layout_height="38dp"
-        android:layout_alignParentTop="true"
-        android:layout_alignParentEnd="true"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="8dp"
-        android:background="#12855C"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:minWidth="0dp"
-        android:text="📷 الماسح"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:textSize="12sp"
-        android:visibility="gone" />
 
 </RelativeLayout>
