@@ -68,10 +68,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            // STREAM_ALARM: أعلى صوتاً وأوضح — يتجاوز الوضع الصامت غالباً · المستوى 100 = الأقصى
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         } catch (e: Exception) {
-            e.printStackTrace()
+            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) } catch (_: Exception) {}
         }
+        // ارفع صوت الإنذار للأقصى برمجياً، فلا يفوت الكاشيرَ صوتُ المسح
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val maxAlarm = am.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            am.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
+        } catch (e: Exception) { e.printStackTrace() }
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
         initViews()
         loadOfflineQueue()
@@ -269,9 +276,52 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "الفلاش غير متاح", Toast.LENGTH_SHORT).show()
         }
     }
+    // 🔗 يفكّكُ رمزَ الربط ويحفظُ عنوانَ الكمبيوتر ورمزَ الكاشير، ثمّ يتصلُ فوراً.
+    private fun handleLinkQR(code: String) {
+        try {
+            val uri = android.net.Uri.parse(code)
+            val ip = uri.getQueryParameter("ip")
+            val port = uri.getQueryParameter("port") ?: "5005"
+            val sid = uri.getQueryParameter("sid") ?: "default"
+            if (ip.isNullOrBlank()) {
+                runOnUiThread { playToneWarning(); vibrateWarning()
+                    txtItemName.text = "⚠️ رمز ربط غير صالح"; txtItemDetails.text = "لا يحتوي عنوان الكمبيوتر" }
+                return
+            }
+            prefs.edit()
+                .putString("server_ip", ip)
+                .putString("server_port", port)
+                .putString("session_id", sid)
+                .apply()
+            runOnUiThread {
+                // حدّث خانات الإعدادات إن كانت مفتوحة
+                edtServerIp.setText(ip); edtServerPort.setText(port)
+                playToneSuccess(); vibrateSuccess()
+                txtItemName.text = "✅ تم الربط بنجاح"
+                txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
+                txtStatusBadge.text = "🔗 هذا الجوّال مقترنٌ بالكاشير ($sid)"
+                setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                layoutSettings.visibility = View.GONE
+                Toast.makeText(this, "تم ربط الجوّال بالكاشير: $sid", Toast.LENGTH_LONG).show()
+            }
+            checkServerStatus()
+        } catch (e: Exception) {
+            runOnUiThread { playToneError(); vibrateError()
+                txtItemName.text = "🔴 تعذّر قراءة رمز الربط"; txtItemDetails.text = e.message ?: "" }
+        }
+    }
+
     private fun onBarcodeDetected(code: String) {
+        // 🔗 رمزُ ربطٍ (QR من شاشة /link في الكمبيوتر)؟ عالِجه كإعداداتٍ لا كباركودِ صنف.
+        //   الصيغة: awael://link?ip=..&port=..&sid=..  — يملأ العنوان ويتصل تلقائياً.
+        if (code.startsWith("awael://link")) {
+            handleLinkQR(code)
+            return
+        }
         val targetUrl = "${getServerUrl()}/api/scan"
-        val jsonPayload = JSONObject().apply { put("barcode", code) }
+        // نرسل sid مع الباركود ليصل للكاشير المقترن به هذا الجوّال (عزلُ الأجهزة المتعدّدة).
+        val sid = prefs.getString("session_id", "default") ?: "default"
+        val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
         val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder().url(targetUrl).post(requestBody).build()
         httpClient.newCall(request).enqueue(object : Callback {
@@ -346,10 +396,11 @@ class MainActivity : AppCompatActivity() {
         synchronized(offlineQueue) {
             queueCopy = ArrayList(offlineQueue)
         }
+        val sid = prefs.getString("session_id", "default") ?: "default"
         Executors.newSingleThreadExecutor().execute {
             for (code in queueCopy) {
                 val targetUrl = "${getServerUrl()}/api/scan"
-                val jsonPayload = JSONObject().apply { put("barcode", code) }
+                val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
                 val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder().url(targetUrl).post(requestBody).build()
                 try {
@@ -395,21 +446,34 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
     }
+    // 🔊 نجاح: نغمتان صاعدتان واضحتان (بِيب-بِيب) — يسمعها الكاشيرُ بلا نظرٍ للشاشة.
     private fun playToneSuccess() {
-        try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (e: Exception) {}
+        try {
+            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 150)
+            heartbeatHandler.postDelayed({
+                try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 150) } catch (e: Exception) {}
+            }, 160)
+        } catch (e: Exception) {}
     }
+    // ⚠️ صنفٌ غير معرّف: نغمةُ تنبيهٍ متوسطةٌ مختلفةٌ عن النجاحِ والفشل.
     private fun playToneWarning() {
-        try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 200) } catch (e: Exception) {}
+        try { toneGenerator?.startTone(ToneGenerator.TONE_SUP_ERROR, 500) } catch (e: Exception) {}
     }
+    // 🔴 فشلُ الشبكة: نغمةُ إنذارٍ طويلةٌ قويّةٌ مميّزةٌ جداً — لا تُخطئها الأذن.
     private fun playToneError() {
-        try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 300) } catch (e: Exception) {}
+        try {
+            toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_NETWORK_LITE, 400)
+            heartbeatHandler.postDelayed({
+                try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_HIGH_L, 500) } catch (e: Exception) {}
+            }, 420)
+        } catch (e: Exception) {}
     }
     private fun vibrateSuccess() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator?.vibrate(VibrationEffect.createOneShot(60, VibrationEffect.DEFAULT_AMPLITUDE))
+            vibrator?.vibrate(VibrationEffect.createOneShot(90, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
-            vibrator?.vibrate(60)
+            vibrator?.vibrate(90)
         }
     }
     private fun vibrateWarning() {
@@ -423,7 +487,8 @@ class MainActivity : AppCompatActivity() {
     }
     private fun vibrateError() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        val pattern = longArrayOf(0, 250, 100, 250)
+        // اهتزازٌ ثلاثيٌّ قويٌّ طويل — يميّز الفشلَ حتى في ضجيج المتجر.
+        val pattern = longArrayOf(0, 400, 150, 400, 150, 400)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator?.vibrate(VibrationEffect.createWaveform(pattern, -1))
         } else {
