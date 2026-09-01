@@ -36,12 +36,20 @@ android {
 }
 
 dependencies {
-    // نظام الأوائل — واجهة WebView سريعة تفتح نظام jawwal مباشرة.
-    // WebView جزءٌ من أندرويد نفسه: لا حاجة لمكتبات كاميرا خارجيّة — النظام يمسح الباركود بنفسه.
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
 
-    // WebKit للتحكّم المتقدّم بالـWebView (تفعيل السياق الآمن للكاميرا على http)
-    implementation("androidx.webkit:webkit:1.10.0")
+    // CameraX — الماسح
+    val cameraxVersion = "1.3.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+
+    // Google ML Kit Barcode Scanning (Offline / Fast)
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
+
+    // OkHttp — إرسال فوري محليّ
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
