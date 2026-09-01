@@ -226,21 +226,23 @@
         android:layout_height="match_parent"
         android:visibility="gone" />
 
-    <!-- زر الرجوع من الموقع إلى الماسح -->
+    <!-- زر الرجوع من الموقع إلى الماسح — صغير في أعلى الشاشة (فوق الموقع) -->
     <Button
         android:id="@+id/btnBackScan"
         android:layout_width="wrap_content"
-        android:layout_height="44dp"
-        android:layout_alignParentBottom="true"
+        android:layout_height="38dp"
+        android:layout_alignParentTop="true"
         android:layout_alignParentEnd="true"
-        android:layout_margin="14dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="8dp"
         android:background="#12855C"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:minWidth="0dp"
         android:text="📷 الماسح"
         android:textColor="#FFFFFF"
         android:textStyle="bold"
-        android:textSize="13sp"
+        android:textSize="12sp"
         android:visibility="gone" />
 
 </RelativeLayout>

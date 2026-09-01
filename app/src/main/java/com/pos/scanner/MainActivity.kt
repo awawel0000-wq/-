@@ -156,6 +156,10 @@ class MainActivity : AppCompatActivity() {
             siteLoaded = true
         }
         w.visibility = View.VISIBLE
+        // نحن الآن داخل الموقع: أخفِ أزرار الماسح، وأظهِر زرَّ العودة الصغير فقط
+        btnSite?.visibility = View.GONE
+        btnSettings.visibility = View.GONE
+        btnTorch.visibility = View.GONE
         btnBackScan?.visibility = View.VISIBLE
     }
 
@@ -165,6 +169,10 @@ class MainActivity : AppCompatActivity() {
         if (w.canGoBack()) { w.goBack(); return }
         w.visibility = View.GONE
         btnBackScan?.visibility = View.GONE
+        // عُدنا للماسح: أرجِع أزراره
+        btnSite?.visibility = View.VISIBLE
+        btnSettings.visibility = View.VISIBLE
+        btnTorch.visibility = View.VISIBLE
     }
     private fun loadSettings() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
