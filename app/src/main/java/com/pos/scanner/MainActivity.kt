@@ -60,8 +60,6 @@ class MainActivity : AppCompatActivity() {
     private var lastScanTime: Long = 0L
     private var isFrameClear: Boolean = true
     private var emptyFramesCount: Int = 0
-    private val offlineQueue = mutableListOf<String>()
-    private var isProcessingQueue = false
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private var isServerConnected = false
     private var toneGenerator: ToneGenerator? = null
@@ -91,7 +89,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace() }
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
         initViews()
-        loadOfflineQueue()
         loadSettings()
         if (allPermissionsGranted()) {
             startCamera()
@@ -112,19 +109,20 @@ class MainActivity : AppCompatActivity() {
         dotConnectionStatus = findViewById(R.id.dotConnectionStatus)
         txtConnectionStatus = findViewById(R.id.txtConnectionStatus)
         btnTorch = findViewById(R.id.btnTorch)
+        // 🔄 زرُّ التحديث: يُعيدُ فحصَ الاتصال وحالةَ الاقتران بلا إعادةِ تشغيلِ البرنامج
+        findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener {
+            txtItemName.text = "🔄 جارٍ تحديث الحالة…"
+            txtItemDetails.text = "إعادة فحص الاتصال بالخادم"
+            txtStatusBadge.text = "⏳ تحديث…"
+            setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+            setDotColor("#F59E0B")
+            refreshStatus()
+        }
         btnSettings = findViewById(R.id.btnSettings)
         layoutPendingQueue = findViewById(R.id.layoutPendingQueue)
         txtPendingCount = findViewById(R.id.txtPendingCount)
         bottomBar = findViewById(R.id.bottomBar)
-        // ضغطةٌ مطوّلةٌ على شريطِ المسحاتِ المعلّقة ⇒ مسحُ القائمةِ (للطوارئ إن علقت)
-        layoutPendingQueue.setOnLongClickListener {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("مسح قائمة الانتظار")
-                .setMessage("حذفُ كلِّ المسحاتِ المعلّقة التي لم تُرسَل؟")
-                .setPositiveButton("مسح") { _, _ -> clearOfflineQueue() }
-                .setNegativeButton("إلغاء", null).show()
-            true
-        }
+        layoutPendingQueue.visibility = View.GONE   // لا قائمةَ انتظار — أُلغِيَ الحفظُ المحلي
         layoutSettings = findViewById(R.id.layoutSettings)
         edtServerIp = findViewById(R.id.edtServerIp)
         edtServerPort = findViewById(R.id.edtServerPort)
@@ -260,6 +258,7 @@ class MainActivity : AppCompatActivity() {
         btnSite?.visibility = View.GONE
         btnSettings.visibility = View.GONE
         btnTorch.visibility = View.GONE
+        findViewById<View>(R.id.btnRefresh).visibility = View.GONE
     }
 
     /** يعود من الموقع إلى شاشة الماسح. */
@@ -271,12 +270,14 @@ class MainActivity : AppCompatActivity() {
         btnSite?.visibility = View.VISIBLE
         btnSettings.visibility = View.VISIBLE
         btnTorch.visibility = View.VISIBLE
+        findViewById<View>(R.id.btnRefresh).visibility = View.VISIBLE
         // إصلاحُ الطبقات: الـ web كان مرفوعاً foreground فوق المستطيلِ والشريطِ السفلي.
         // نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
         previewView.bringToFront()                       // الكاميرا خلفية
         (findViewById<View>(R.id.scanBox))?.bringToFront() // المستطيلُ الأخضرُ الثابت
         bottomBar.bringToFront()                          // شريطُ البياناتِ السفلي
         btnSite?.bringToFront(); btnSettings.bringToFront(); btnTorch.bringToFront()
+        findViewById<View>(R.id.btnRefresh).bringToFront()
         layoutPendingQueue.bringToFront()
         val root = w.parent as? android.view.ViewGroup
         root?.requestLayout(); root?.invalidate()          // إجبارُ إعادةِ الرسمِ فوراً
@@ -326,14 +327,58 @@ class MainActivity : AppCompatActivity() {
             override fun onResponse(call: Call, response: Response) {
                 val connected = response.code in 200..499
                 updateConnectionUi(connected)
-                if (connected && offlineQueue.isNotEmpty()) {
-                    processOfflineQueue()
+                // لا نُرسلُ المعلّقاتِ تلقائياً — نُنبّهُ فقط ليُرسلَها الكاشيرُ بضغطةٍ واعيةٍ
+                //   (منعاً لحقنِها في فاتورةٍ خطأٍ لو تغيّرتِ الفاتورةُ أثناءَ الانقطاع).
+            }
+        })
+    }
+    // 🔄 تحديثٌ يدويٌّ بنتيجةٍ صريحةٍ (بلا إعادةِ تشغيلِ البرنامج).
+    private fun refreshStatus() {
+        val testUrl = "${getServerUrl()}/api/scan"
+        val request = Request.Builder().url(testUrl).get().build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                updateConnectionUi(false)
+                val paired = prefs.getBoolean("is_paired", false)
+                runOnUiThread {
+                    playToneWarning(); vibrateWarning()
+                    if (paired) {
+                        txtItemName.text = "🔴 غير متصل بالخادم"
+                        txtItemDetails.text = "تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل"
+                        txtStatusBadge.text = "❌ لا يوجد اتصال — أعد المحاولة"
+                    } else {
+                        txtItemName.text = "🔴 لست مقترناً بالخادم"
+                        txtItemDetails.text = "اضغط \"أعد الربط\" وامسح رمز الربط (QR) من الكمبيوتر"
+                        txtStatusBadge.text = "❌ يلزم الاقتران أولاً"
+                    }
+                    setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                }
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val connected = response.code in 200..499
+                updateConnectionUi(connected)   // يضبطُ is_paired=true عند النجاح
+                runOnUiThread {
+                    if (connected) {
+                        playToneSuccess(); vibrateSuccess()
+                        txtItemName.text = "✅ متصل بالخادم — جاهز للمسح"
+                        txtItemDetails.text = "الحالة مُحدّثة"
+                        txtStatusBadge.text = "🔗 متصلٌ وجاهز"
+                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                    } else {
+                        playToneWarning(); vibrateWarning()
+                        txtItemName.text = "⚠️ الخادم ردّ بخطأ (${response.code})"
+                        txtItemDetails.text = "تأكّد أن البرنامج يعمل على الكمبيوتر"
+                        txtStatusBadge.text = "❌ اتصالٌ غيرُ مكتمل"
+                        setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                    }
                 }
             }
         })
     }
     private fun updateConnectionUi(connected: Boolean) {
         isServerConnected = connected
+        // أيُّ اتصالٍ ناجحٍ فعليٍّ = مقترنٌ (يفتحُ المسح). يشملُ الفحصَ الدوريَّ والاختبارَ اليدوي.
+        if (connected) prefs.edit().putBoolean("is_paired", true).apply()
         runOnUiThread {
             if (connected) {
                 setDotColor("#22C55E")
@@ -452,21 +497,63 @@ class MainActivity : AppCompatActivity() {
                 .putString("session_id", sid)
                 .apply()
             runOnUiThread {
-                // حدّث خانات الإعدادات إن كانت مفتوحة
+                // حُفظ العنوان — لكن لا نُعلنُ النجاحَ قبلَ التحقّقِ الفعليِّ من الخادم
                 edtServerIp.setText(ip); edtServerPort.setText(port)
-                playToneSuccess(); vibrateSuccess()
-                txtItemName.text = "✅ تم الربط بنجاح"
+                txtItemName.text = "⏳ جارٍ التحقّق من الاتصال…"
                 txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
-                txtStatusBadge.text = "🔗 هذا الجوّال مقترنٌ بالكاشير ($sid)"
-                setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                txtStatusBadge.text = "⏳ فحص الاتصال بالكمبيوتر…"
+                setBadgeStyle("#1E293B", "#38BDF8", "#334155")
                 layoutSettings.visibility = View.GONE
-                Toast.makeText(this, "تم ربط الجوّال بالكاشير: $sid", Toast.LENGTH_LONG).show()
             }
-            checkServerStatus()
+            // 🔎 تحقّقٌ حقيقيّ: الاقترانُ ناجحٌ فقط إن ردَّ الخادم
+            verifyLinkConnection(ip, port, sid)
         } catch (e: Exception) {
             runOnUiThread { playToneError(); vibrateError()
                 txtItemName.text = "🔴 تعذّر قراءة رمز الربط"; txtItemDetails.text = e.message ?: "" }
         }
+    }
+
+    // 🔎 يتحقّقُ فعلياً من وصولِ الخادم بعدَ قراءةِ رمزِ الربط.
+    // النجاحُ (صوتٌ أخضرُ ورسالةُ "تم الربط") لا يظهرُ إلا إن ردَّ الكمبيوتر فعلاً.
+    private fun verifyLinkConnection(ip: String, port: String, sid: String) {
+        val testUrl = "http://$ip:$port/api/scan"
+        val request = Request.Builder().url(testUrl).get().build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                // العنوانُ محفوظٌ لكنِ الخادمُ لا يردّ — نصارحُ المستخدمَ بلا ادّعاءِ نجاح
+                updateConnectionUi(false)
+                runOnUiThread {
+                    playToneWarning(); vibrateWarning()
+                    txtItemName.text = "⚠️ حُفظ العنوان — لكن لا يوجد اتصال"
+                    txtItemDetails.text = "الكمبيوتر ($ip) لا يردّ. تأكّد: الجوّال والكمبيوتر على نفس الواي فاي، والبرنامج يعمل."
+                    txtStatusBadge.text = "🔴 غير متصل — أعد المحاولة بعد التأكّد من الشبكة"
+                    setBadgeStyle("#450A0A", "#F87171", "#EF4444")
+                }
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val connected = response.code in 200..499
+                updateConnectionUi(connected)
+                runOnUiThread {
+                    if (connected) {
+                        prefs.edit().putBoolean("is_paired", true).apply()   // اقترانٌ حقيقيٌّ مؤكّد
+                        playToneSuccess(); vibrateSuccess()
+                        txtItemName.text = "✅ تم الربط والاتصال بالخادم"
+                        txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
+                        txtStatusBadge.text = "🔗 مقترنٌ ومتصلٌ بالكاشير ($sid)"
+                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                        Toast.makeText(this@MainActivity, "تم ربط الجوّال والاتصال بالكاشير: $sid", Toast.LENGTH_LONG).show()
+                        // لا إرسالَ تلقائياً للمعلّقات — الكاشيرُ يُرسلُها بضغطةٍ واعيةٍ على الشريط
+                        //   بعد التأكّدِ أنّ الفاتورةَ الصحيحةَ مفتوحة (منعَ الحقنِ في فاتورةٍ خطأ).
+                    } else {
+                        playToneWarning(); vibrateWarning()
+                        txtItemName.text = "⚠️ حُفظ العنوان — الخادم ردّ بخطأ"
+                        txtItemDetails.text = "استجابة غير متوقعة (${response.code}). تأكّد أن البرنامج يعمل على المنفذ $port."
+                        txtStatusBadge.text = "🔴 اتصالٌ غيرُ مكتمل"
+                        setBadgeStyle("#450A0A", "#F87171", "#EF4444")
+                    }
+                }
+            }
+        })
     }
 
     private fun onBarcodeDetected(code: String) {
@@ -487,6 +574,18 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        // 🔒 بوابةُ الوضوح: لا نُرسلُ ونحن غيرُ مقترنين — نُصارحُ الكاشيرَ بالسبب مباشرةً.
+        val isPaired = prefs.getBoolean("is_paired", false)
+        if (!isPaired) {
+            runOnUiThread {
+                playToneError(); vibrateError()
+                txtItemName.text = "🔴 فشل — لست مقترناً بالخادم"
+                txtItemDetails.text = "الباركود: $code — يجب الاقتران أولاً"
+                txtStatusBadge.text = "❌ اضغط \"أعد الربط\" وامسح رمز الربط (QR) من الكمبيوتر"
+                setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+            }
+            return
+        }
         val targetUrl = "${getServerUrl()}/api/scan"
         // نرسل sid مع الباركود ليصل للكاشير المقترن به هذا الجوّال (عزلُ الأجهزة المتعدّدة).
         val sid = prefs.getString("session_id", "default") ?: "default"
@@ -495,13 +594,13 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder().url(targetUrl).post(requestBody).build()
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                addToOfflineQueue(code)
+                // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسحَ بعدَ رجوعِ الاتصال
                 runOnUiThread {
                     playToneError()
                     vibrateError()
-                    txtItemName.text = "🔴 فشل الاتصال بالشبكة!"
-                    txtItemDetails.text = "الباركود: $code (تم حفظه في الانتظار)"
-                    txtStatusBadge.text = "⚠️ تم الحفظ محلياً للإرسال التلقائي"
+                    txtItemName.text = "🔴 فشل — غير متصل بالخادم"
+                    txtItemDetails.text = "الباركود: $code — تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل، ثم أعِد المسح"
+                    txtStatusBadge.text = "❌ لم يُرسَل — انقطاع الاتصال بالخادم"
                     setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
                 }
             }
@@ -537,96 +636,32 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } catch (e: Exception) {
-                    runOnUiThread {
-                        playToneSuccess()
-                        vibrateSuccess()
-                        txtItemName.text = "الباركود: $code"
-                        txtItemDetails.text = "تم الإرسال بنجاح"
-                        txtStatusBadge.text = "✅ تم الاستلام بنجاح"
-                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                    // الردُّ وصلَ لكن تعذّرَ تحليلُه. لا نَكذِبُ بالنجاح:
+                    //   نجاحٌ فقط إن كانتِ الاستجابةُ ناجحةً فعلاً (2xx)؛ وإلا نحفظُ في الانتظار.
+                    if (response.isSuccessful) {
+                        runOnUiThread {
+                            playToneSuccess(); vibrateSuccess()
+                            txtItemName.text = "الباركود: $code"
+                            txtItemDetails.text = "تم الاستلام بنجاح"
+                            txtStatusBadge.text = "✅ تم الاستلام بنجاح"
+                            setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                        }
+                    } else {
+                        // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسح
+                        runOnUiThread {
+                            playToneError(); vibrateError()
+                            txtItemName.text = "🔴 فشل الإرسال — الخادم ردّ بخطأ (${response.code})"
+                            txtItemDetails.text = "الباركود: $code — أعِد المسح"
+                            txtStatusBadge.text = "❌ لم يُرسَل — أعد المسح"
+                            setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                        }
                     }
                 }
             }
         })
     }
-    private fun addToOfflineQueue(code: String) {
-        synchronized(offlineQueue) {
-            offlineQueue.add(code)   // نسمحُ بالتكرار (نفسُ الصنفِ مرّتين = كميّتان)
-            // حدٌّ أقصى للقائمةِ منعاً لتضخّمِها بلا نهاية — نُسقِطُ الأقدم
-            while (offlineQueue.size > 500) offlineQueue.removeAt(0)
-            saveOfflineQueue()
-        }
-        updateQueueUi()
-    }
-    /** مسحُ قائمةِ الانتظارِ يدوياً (للطوارئ إن علقت). */
-    private fun clearOfflineQueue() {
-        synchronized(offlineQueue) { offlineQueue.clear(); saveOfflineQueue() }
-        isProcessingQueue = false
-        updateQueueUi()
-        Toast.makeText(this, "تم مسح قائمة الانتظار", Toast.LENGTH_SHORT).show()
-    }
-    private fun processOfflineQueue() {
-        if (isProcessingQueue || offlineQueue.isEmpty()) return
-        isProcessingQueue = true
-        val queueCopy: List<String>
-        synchronized(offlineQueue) {
-            queueCopy = ArrayList(offlineQueue)
-        }
-        val sid = prefs.getString("session_id", "default") ?: "default"
-        Executors.newSingleThreadExecutor().execute {
-            // try/finally يضمنُ ألّا يعلقَ isProcessingQueue=true أبداً (كان سببَ توقّفِ الإرسالِ بعد انقطاعِ الكهرباء)
-            try {
-                for (code in queueCopy) {
-                    val targetUrl = "${getServerUrl()}/api/scan"
-                    val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
-                    val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                    val request = Request.Builder().url(targetUrl).post(requestBody).build()
-                    try {
-                        val response = httpClient.newCall(request).execute()
-                        val ok = response.isSuccessful
-                        try { response.close() } catch (_: Exception) {}
-                        if (ok) {
-                            synchronized(offlineQueue) { offlineQueue.remove(code); saveOfflineQueue() }
-                        } else {
-                            break   // السيرفرُ ردّ برفضٍ — نتوقّفُ ونعيدُ المحاولةَ لاحقاً (لا نحذف)
-                        }
-                    } catch (e: Exception) {
-                        break   // شبكةٌ متقطّعة — نتوقّفُ ونعيدُ لاحقاً (القائمةُ محفوظة)
-                    }
-                }
-            } finally {
-                isProcessingQueue = false   // مهما حصل: نُفرِجُ عن القفل فلا يتعطّلُ الإرسالُ للأبد
-                updateQueueUi()
-            }
-        }
-    }
-    private fun updateQueueUi() {
-        runOnUiThread {
-            if (offlineQueue.isEmpty()) {
-                layoutPendingQueue.visibility = View.GONE
-            } else {
-                layoutPendingQueue.visibility = View.VISIBLE
-                txtPendingCount.text = "📦 يوجد ${offlineQueue.size} مسحات معلقة — جاري الإرسال تلقائياً..."
-            }
-        }
-    }
-    private fun saveOfflineQueue() {
-        val jsonArray = JSONArray(offlineQueue)
-        prefs.edit().putString("offline_queue_data", jsonArray.toString()).apply()
-    }
-    private fun loadOfflineQueue() {
-        val data = prefs.getString("offline_queue_data", null) ?: return
-        try {
-            val jsonArray = JSONArray(data)
-            offlineQueue.clear()
-            for (i in 0 until jsonArray.length()) {
-                offlineQueue.add(jsonArray.getString(i))
-            }
-            updateQueueUi()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
+    // (أُلغِيَ الحفظُ المحليُّ للمسحاتِ نهائياً: لا قائمةَ انتظار، لا إرسالَ مؤجّل.
+    //  فشلُ الاتصالِ يُعرَضُ صريحاً ويُعيدُ الكاشيرُ المسح — تفادياً لحقنِ مسحاتٍ في فاتورةٍ خطأ.)
     // 🔊 نجاح: نغمتان صاعدتان واضحتان (بِيب-بِيب) — يسمعها الكاشيرُ بلا نظرٍ للشاشة.
     private fun playToneSuccess() {
         try {
