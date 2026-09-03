@@ -486,6 +486,9 @@ class MainActivity : AppCompatActivity() {
             val ip = uri.getQueryParameter("ip")
             val port = uri.getQueryParameter("port") ?: "5005"
             val sid = uri.getQueryParameter("sid") ?: "default"
+            // 🔑 مفتاحُ الجلسة (اختياريّ): يأتي في رمز الربطِ الجديد. القديمُ بلا مفتاحٍ = ""
+            //    فيبقى العملُ كما كان حتى يُفعّلَ المالكُ فرضَ المفتاحِ من لوحته.
+            val token = uri.getQueryParameter("token") ?: ""
             if (ip.isNullOrBlank()) {
                 runOnUiThread { playToneWarning(); vibrateWarning()
                     txtItemName.text = "⚠️ رمز ربط غير صالح"; txtItemDetails.text = "لا يحتوي عنوان الكمبيوتر" }
@@ -495,6 +498,7 @@ class MainActivity : AppCompatActivity() {
                 .putString("server_ip", ip)
                 .putString("server_port", port)
                 .putString("session_id", sid)
+                .putString("scan_token", token)
                 .apply()
             runOnUiThread {
                 // حُفظ العنوان — لكن لا نُعلنُ النجاحَ قبلَ التحقّقِ الفعليِّ من الخادم
@@ -589,7 +593,13 @@ class MainActivity : AppCompatActivity() {
         val targetUrl = "${getServerUrl()}/api/scan"
         // نرسل sid مع الباركود ليصل للكاشير المقترن به هذا الجوّال (عزلُ الأجهزة المتعدّدة).
         val sid = prefs.getString("session_id", "default") ?: "default"
-        val jsonPayload = JSONObject().apply { put("barcode", code); put("sid", sid) }
+        // 🔑 مفتاحُ الجلسة — يُرسَل مع كلّ مسح إن وُجد؛ فارغٌ = التطبيقُ لم يُقترن بمفتاحٍ بعد
+        //    (يُرفض المسحُ فقط إن فعّل المالكُ الفرضَ في لوحته).
+        val token = prefs.getString("scan_token", "") ?: ""
+        val jsonPayload = JSONObject().apply {
+            put("barcode", code); put("sid", sid)
+            if (token.isNotBlank()) put("token", token)
+        }
         val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder().url(targetUrl).post(requestBody).build()
         httpClient.newCall(request).enqueue(object : Callback {
