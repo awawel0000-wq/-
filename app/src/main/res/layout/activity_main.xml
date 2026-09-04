@@ -146,7 +146,7 @@
                     android:layout_centerVertical="true"
                     android:text="⚙️ الإعدادات"
                     android:textColor="#38BDF8"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:textStyle="bold" />
 
                 <Button
@@ -170,7 +170,7 @@
                 android:layout_marginTop="18dp"
                 android:text="الاتصال بالخادم المحاسبي"
                 android:textColor="#38BDF8"
-                android:textSize="15sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <EditText
@@ -237,7 +237,7 @@
                 android:layout_marginTop="16dp"
                 android:text="التنبيه الصوتي"
                 android:textColor="#38BDF8"
-                android:textSize="15sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <Switch
@@ -247,7 +247,7 @@
                 android:layout_marginTop="10dp"
                 android:text="🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)"
                 android:textColor="#F8FAFC"
-                android:textSize="15sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <TextView

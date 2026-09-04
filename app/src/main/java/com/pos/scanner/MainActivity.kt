@@ -151,6 +151,8 @@ class MainActivity : AppCompatActivity() {
         txtItemName = findViewById(R.id.txtItemName)
         txtItemDetails = findViewById(R.id.txtItemDetails)
         txtStatusBadge = findViewById(R.id.txtStatusBadge)
+        // لمسةٌ على شريطِ الحالةِ ("تم الإرسال…") تمسحُ الاسمَ والسعرَ والباركودَ من الشاشة.
+        txtStatusBadge.setOnClickListener { clearDisplay() }
         txtResultTop = findViewById(R.id.txtResultTop)
         showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A")
         switchVoice = findViewById(R.id.switchVoice)
@@ -165,6 +167,8 @@ class MainActivity : AppCompatActivity() {
         btnInstallVoice?.setOnClickListener { openTtsInstall() }
         txtScanCount = findViewById(R.id.txtScanCount)
         txtScanCount?.background = roundBg("#CC0F172A", 20f)
+        // لمسةٌ على العدّادِ تصفّرُه (بتأكيد).
+        txtScanCount?.setOnClickListener { confirmResetCounter() }
         applyLangUi(false)
         btnLang?.setOnClickListener {
             val cur = prefs.getString("voice_lang", "ar") ?: "ar"
@@ -440,6 +444,28 @@ class MainActivity : AppCompatActivity() {
     private fun bumpScanCount() {
         scanCount++
         runOnUiThread { txtScanCount?.text = "المسحات: $scanCount" }
+    }
+
+    // ★ تصفيرُ العدّادِ بتأكيد (لمسةٌ على العدّاد، أو من القائمةِ لاحقاً).
+    private fun confirmResetCounter() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("تصفير العدّاد")
+            .setMessage("تصفير عدّاد المسحات إلى صفر؟")
+            .setPositiveButton("تصفير") { _, _ ->
+                scanCount = 0
+                txtScanCount?.text = "المسحات: 0"
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    // ★ يمسحُ نتيجةَ الشاشةِ (الاسمَ فوق، والسعرَ والباركودَ تحت) ويعودُ للانتظار.
+    private fun clearDisplay() {
+        showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A")
+        txtItemName.text = ""
+        txtItemDetails.text = ""
+        txtStatusBadge.text = "جاهز للمسح"
+        setBadgeStyle("#1E293B", "#38BDF8", "#334155")
     }
 
     // ★ نطقٌ: يتبعُ لغةَ الصوتِ المختارة (عربي/إنجليزي) والصيغةَ العربيّةَ المدعومةَ فعلاً على الجهاز.
@@ -809,11 +835,11 @@ class MainActivity : AppCompatActivity() {
                             playToneSuccess()
                             vibrateSuccess()
                             bumpScanCount()
-                            val topText = if (itemPrice.isNotEmpty()) "✅ $itemName — $itemPrice₪" else "✅ $itemName"
-                            showTopResult(topText, "#15803D")
+                            // الاسمُ فوقَ الإطارِ الأخضر (كما طلبت)، والسعرُ والباركودُ في الأسفلِ فقط — بلا تكرارٍ للاسم.
+                            showTopResult("✅ $itemName", "#15803D")
                             speak(itemName, "Received")
-                            txtItemName.text = itemName
-                            txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  |  الباركود: $code" else "الباركود: $code"
+                            txtItemName.text = ""
+                            txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  ·  الباركود: $code" else "الباركود: $code"
                             txtStatusBadge.text = "✅ تم الإرسال والإضافة للفاتورة"
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         } else if (!isFound || response.code == 404) {
@@ -831,8 +857,8 @@ class MainActivity : AppCompatActivity() {
                             bumpScanCount()
                             showTopResult("✅ تم الاستلام", "#15803D")
                             speak("تم الاستلام", "Received")
-                            txtItemName.text = "الباركود: $code"
-                            txtItemDetails.text = "تم الاستلام بنجاح"
+                            txtItemName.text = ""
+                            txtItemDetails.text = "الباركود: $code"
                             txtStatusBadge.text = "✅ تم النقل بنجاح"
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
@@ -846,8 +872,8 @@ class MainActivity : AppCompatActivity() {
                             bumpScanCount()
                             showTopResult("✅ تم الاستلام", "#15803D")
                             speak("تم الاستلام", "Received")
-                            txtItemName.text = "الباركود: $code"
-                            txtItemDetails.text = "تم الاستلام بنجاح"
+                            txtItemName.text = ""
+                            txtItemDetails.text = "الباركود: $code"
                             txtStatusBadge.text = "✅ تم الاستلام بنجاح"
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
