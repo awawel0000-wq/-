@@ -141,7 +141,7 @@ class MainActivity : AppCompatActivity() {
         layoutPendingQueue.visibility = View.GONE   // لا قائمةَ انتظار — أُلغِيَ الحفظُ المحلي
         layoutSettings = findViewById(R.id.settingsPanel)
         findViewById<Button>(R.id.btnCloseSettings).setOnClickListener {
-            layoutSettings.visibility = View.GONE
+            closeSettings()
         }
         edtServerIp = findViewById(R.id.edtServerIp)
         edtServerPort = findViewById(R.id.edtServerPort)
@@ -181,27 +181,19 @@ class MainActivity : AppCompatActivity() {
         styleTopButtons()
         btnTorch.setOnClickListener { toggleTorch() }
         btnSettings.setOnClickListener {
-            layoutSettings.visibility = if (layoutSettings.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            txtTestResult.visibility = View.GONE
+            if (layoutSettings.visibility == View.VISIBLE) closeSettings() else openSettings()
         }
         btnTestConnection.setOnClickListener { testServerConnection() }
         btnSaveSettings.setOnClickListener {
             val ip = edtServerIp.text.toString().trim()
             val port = edtServerPort.text.toString().trim()
             prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
-            layoutSettings.visibility = View.GONE
-            Toast.makeText(this, "تم حفظ الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
+            closeSettings()
+            Toast.makeText(this, L("تم حفظ الإعدادات بنجاح!", "Settings saved!"), Toast.LENGTH_SHORT).show()
             checkServerStatus()
         }
         // زر: أعد الربط بمسح رمز QR — يقفل اللوحة ويوجّه الكاميرا للرمز (تُلتقط تلقائياً)
-        findViewById<Button>(R.id.btnScanLink).setOnClickListener {
-            layoutSettings.visibility = View.GONE
-            txtItemName.text = "📷 وجّه الكاميرا لرمز الربط"
-            txtItemDetails.text = "امسح QR الجهاز الجديد — يقترن فوراً"
-            txtStatusBadge.text = "بانتظار رمز الربط…"
-            setBadgeStyle("#1E293B", "#38BDF8", "#334155")
-            Toast.makeText(this, "وجّه الكاميرا نحو رمز الربط", Toast.LENGTH_LONG).show()
-        }
+        findViewById<Button>(R.id.btnScanLink).setOnClickListener { startRelink() }
         setDotColor("#EF4444")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
 
@@ -220,6 +212,13 @@ class MainActivity : AppCompatActivity() {
             @android.webkit.JavascriptInterface
             fun closeScan() { runOnUiThread { if (scanForSite) { playToneSuccess(); stopSiteScan() } } }
         }, "AndroidApp")
+        // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
+        findViewById<Button>(R.id.btnMenu).apply {
+            background = roundBg("#99000000", 26f)
+            setOnClickListener { showMainMenu(this) }
+        }
+        // ★ طبّقْ لغةَ الواجهةِ بعدَ ربطِ كلِّ العناصر
+        applyLanguage()
     }
 
     /** يُظهر الكاميرا (الماسح السريع) ملءَ الشاشة فوق الموقع — قراءةٌ سهلةٌ قويّة. */
@@ -443,29 +442,125 @@ class MainActivity : AppCompatActivity() {
     // ★ يزيدُ عدّادَ مسحاتِ الجلسة (المسحاتُ الناجحةُ التي وصلتِ النظام).
     private fun bumpScanCount() {
         scanCount++
-        runOnUiThread { txtScanCount?.text = "المسحات: $scanCount" }
+        runOnUiThread { txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount }
     }
 
-    // ★ تصفيرُ العدّادِ بتأكيد (لمسةٌ على العدّاد، أو من القائمةِ لاحقاً).
+    // ★ تصفيرُ العدّادِ بتأكيد (لمسةٌ على العدّاد، أو من القائمة).
     private fun confirmResetCounter() {
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("تصفير العدّاد")
-            .setMessage("تصفير عدّاد المسحات إلى صفر؟")
-            .setPositiveButton("تصفير") { _, _ ->
+            .setTitle(L("تصفير العدّاد", "Reset counter"))
+            .setMessage(L("تصفير عدّاد المسحات إلى صفر؟", "Reset the scan counter to zero?"))
+            .setPositiveButton(L("تصفير", "Reset")) { _, _ ->
                 scanCount = 0
-                txtScanCount?.text = "المسحات: 0"
+                txtScanCount?.text = L("المسحات: ", "Scans: ") + "0"
             }
-            .setNegativeButton("إلغاء", null)
+            .setNegativeButton(L("إلغاء", "Cancel"), null)
             .show()
     }
 
     // ★ يمسحُ نتيجةَ الشاشةِ (الاسمَ فوق، والسعرَ والباركودَ تحت) ويعودُ للانتظار.
     private fun clearDisplay() {
-        showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A")
+        showTopResult(L("وجّه الكاميرا نحو الباركود…", "Aim the camera at a barcode…"), "#CC0F172A")
         txtItemName.text = ""
         txtItemDetails.text = ""
-        txtStatusBadge.text = "جاهز للمسح"
+        txtStatusBadge.text = L("جاهز للمسح", "Ready to scan")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+    }
+
+    // ★ لغةُ البرنامج: يعيدُ النصَّ العربيَّ أو الإنجليزيَّ حسبَ اختيارِ المستخدم (الافتراضي عربي).
+    private fun L(ar: String, en: String): String =
+        if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") en else ar
+
+    // ★ يبدّلُ لغةَ واجهةِ البرنامجِ فوراً بلا إعادةِ تشغيل.
+    private fun toggleUiLang() {
+        val cur = prefs.getString("ui_lang", "ar") ?: "ar"
+        prefs.edit().putString("ui_lang", if (cur == "ar") "en" else "ar").apply()
+        applyLanguage()
+    }
+
+    // ★ يطبّقُ لغةَ الواجهةِ على كلِّ النصوصِ الثابتةِ + اتجاهِ التخطيط (RTL عربي / LTR إنجليزي).
+    private fun applyLanguage() {
+        val en = (prefs.getString("ui_lang", "ar") ?: "ar") == "en"
+        window.decorView.layoutDirection = if (en) View.LAYOUT_DIRECTION_LTR else View.LAYOUT_DIRECTION_RTL
+        btnSite?.text = L("🏠 الدخول إلى نظام الأوائل المحاسبي", "🏠 Enter Al-Awael Accounting")
+        findViewById<TextView>(R.id.lblSettingsTitle).text = L("⚙️ الإعدادات", "⚙️ Settings")
+        findViewById<Button>(R.id.btnCloseSettings).text = L("✕ إغلاق", "✕ Close")
+        findViewById<TextView>(R.id.lblConn).text = L("الاتصال بالخادم المحاسبي", "Server connection")
+        edtServerIp.hint = L("عنوان IP الكمبيوتر (مثال: 192.168.1.100)", "Computer IP (e.g. 192.168.1.100)")
+        edtServerPort.hint = L("البورت (افتراضي: 5005)", "Port (default: 5005)")
+        findViewById<Button>(R.id.btnTestConnection).text = L("فحص الاتصال", "Test connection")
+        btnSaveSettings.text = L("حفظ الإعدادات", "Save settings")
+        findViewById<TextView>(R.id.lblVoiceSection).text = L("التنبيه الصوتي", "Voice feedback")
+        switchVoice?.text = L("🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)", "🔊 Speak result (instead of beep)")
+        findViewById<TextView>(R.id.lblVoiceLang).text = L("لغة الصوت:", "Voice language:")
+        findViewById<TextView>(R.id.txtVoiceHint).text = L(
+            "عند النجاح يقول اسم الصنف، وعند الفشل «لم يصل إلى النظام».",
+            "On success it says the item name; on failure «Not sent to system».")
+        findViewById<TextView>(R.id.lblRelinkHint).text = L(
+            "أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر",
+            "Or switch device by scanning the link QR from the computer")
+        findViewById<Button>(R.id.btnScanLink).text = L("📷 مسح رمز الربط بالكاميرا", "📷 Scan link QR")
+        updateLangButton()
+        txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount
+    }
+
+    // ★ القائمة (☰): تجمعُ كلَّ الأوامرِ مثلَ تطبيقاتِ الجوال.
+    private fun showMainMenu(anchor: View) {
+        val pm = android.widget.PopupMenu(this, anchor)
+        val m = pm.menu
+        m.add(0, 1, 0, L("💡 الكشّاف", "💡 Torch"))
+        m.add(0, 2, 1, L("📷 إعادة الربط (QR)", "📷 Re-link (QR)"))
+        m.add(0, 3, 2, L("🔌 إعدادات الاتصال", "🔌 Connection settings"))
+        m.add(0, 4, 3, L("🌐 لغة البرنامج: عربي", "🌐 App language: English"))
+        m.add(0, 5, 4, L("🔄 تحديث الحالة", "🔄 Refresh status"))
+        m.add(0, 6, 5, L("🔢 تصفير العدّاد", "🔢 Reset counter"))
+        m.add(0, 7, 6, L("ℹ️ عن التطبيق", "ℹ️ About"))
+        pm.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> toggleTorch()
+                2 -> startRelink()
+                3 -> openSettings()
+                4 -> toggleUiLang()
+                5 -> refreshStatus()
+                6 -> confirmResetCounter()
+                7 -> showAbout()
+            }
+            true
+        }
+        pm.show()
+    }
+
+    // ★ فتحُ/إغلاقُ الإعدادات: نخفي عمودَ الماسحِ والشريطَ السفليَّ حتى لا يطفوا فوقَ الإعدادات (elevation).
+    private fun openSettings() {
+        findViewById<View>(R.id.headerStack).visibility = View.GONE
+        bottomBar.visibility = View.GONE
+        layoutSettings.visibility = View.VISIBLE
+        layoutSettings.bringToFront()
+        txtTestResult.visibility = View.GONE
+    }
+    private fun closeSettings() {
+        layoutSettings.visibility = View.GONE
+        findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
+        bottomBar.visibility = View.VISIBLE
+    }
+
+    // ★ إعادةُ الربطِ بمسحِ QR (نفسُ زرِّ "مسح رمز الربط" داخلَ الإعدادات).
+    private fun startRelink() {
+        closeSettings()
+        txtResultTop.text = L("📷 وجّه الكاميرا لرمز الربط", "📷 Aim the camera at the link QR")
+        txtStatusBadge.text = L("بانتظار رمز الربط…", "Waiting for link QR…")
+        setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+        Toast.makeText(this, L("وجّه الكاميرا نحو رمز الربط", "Aim at the link QR"), Toast.LENGTH_LONG).show()
+    }
+
+    // ★ عن التطبيق: الاسمُ والإصدار.
+    private fun showAbout() {
+        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "" }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(L("عن التطبيق", "About"))
+            .setMessage(L("ماسح باركود الأوائل\nالإصدار: ", "Al-Awael Barcode Scanner\nVersion: ") + v)
+            .setPositiveButton(L("حسناً", "OK"), null)
+            .show()
     }
 
     // ★ نطقٌ: يتبعُ لغةَ الصوتِ المختارة (عربي/إنجليزي) والصيغةَ العربيّةَ المدعومةَ فعلاً على الجهاز.
@@ -712,7 +807,7 @@ class MainActivity : AppCompatActivity() {
                 txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
                 txtStatusBadge.text = "⏳ فحص الاتصال بالكمبيوتر…"
                 setBadgeStyle("#1E293B", "#38BDF8", "#334155")
-                layoutSettings.visibility = View.GONE
+                closeSettings()
             }
             // 🔎 تحقّقٌ حقيقيّ: الاقترانُ ناجحٌ فقط إن ردَّ الخادم
             verifyLinkConnection(ip, port, sid)
@@ -788,11 +883,11 @@ class MainActivity : AppCompatActivity() {
         if (!isPaired) {
             runOnUiThread {
                 playToneError(); vibrateError()
-                showTopResult("🔴 لست مقترناً — امسح رمز الربط", "#B91C1C")
+                showTopResult(L("🔴 لست مقترناً — امسح رمز الربط", "🔴 Not linked — scan the link QR"), "#B91C1C")
                 speak("لست مقترنا، امسح رمز الربط", "Not linked, scan the link code")
-                txtItemName.text = "🔴 فشل — لست مقترناً بالخادم"
-                txtItemDetails.text = "الباركود: $code — يجب الاقتران أولاً"
-                txtStatusBadge.text = "❌ اضغط \"أعد الربط\" وامسح رمز الربط (QR) من الكمبيوتر"
+                txtItemName.text = ""
+                txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                txtStatusBadge.text = L("❌ افتح القائمة ← إعادة الربط، وامسح QR من الكمبيوتر", "❌ Open menu → Re-link, scan QR from the computer")
                 setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
             }
             return
@@ -815,11 +910,11 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     playToneError()
                     vibrateError()
-                    showTopResult("🔴 لم يصل إلى النظام — أعِد المسح", "#B91C1C")
+                    showTopResult(L("🔴 لم يصل إلى النظام — أعِد المسح", "🔴 Not sent — scan again"), "#B91C1C")
                     speak("لم يصل إلى النظام، أعد المسح", "Not sent, scan again")
-                    txtItemName.text = "🔴 فشل — غير متصل بالخادم"
-                    txtItemDetails.text = "الباركود: $code — تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل، ثم أعِد المسح"
-                    txtStatusBadge.text = "❌ لم يُرسَل — انقطاع الاتصال بالخادم"
+                    txtItemName.text = ""
+                    txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                    txtStatusBadge.text = L("❌ لم يُرسَل — انقطاع الاتصال بالخادم", "❌ Not sent — no connection to server")
                     setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
                 }
             }
@@ -839,27 +934,29 @@ class MainActivity : AppCompatActivity() {
                             showTopResult("✅ $itemName", "#15803D")
                             speak(itemName, "Received")
                             txtItemName.text = ""
-                            txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  ·  الباركود: $code" else "الباركود: $code"
-                            txtStatusBadge.text = "✅ تم الإرسال والإضافة للفاتورة"
+                            txtItemDetails.text = if (itemPrice.isNotEmpty())
+                                L("السعر: ", "Price: ") + "$itemPrice ₪  ·  " + L("الباركود: ", "Barcode: ") + code
+                                else L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = L("✅ تم الإرسال والإضافة للفاتورة", "✅ Sent & added to invoice")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         } else if (!isFound || response.code == 404) {
                             playToneWarning()
                             vibrateWarning()
-                            showTopResult("⚠️ صنف غير معرّف", "#B45309")
+                            showTopResult(L("⚠️ صنف غير معرّف", "⚠️ Unknown item"), "#B45309")
                             speak("صنف غير معرّف", "Unknown item")
-                            txtItemName.text = "⚠️ صنف غير معرّف!"
-                            txtItemDetails.text = "الباركود: $code"
-                            txtStatusBadge.text = "لا يوجد صنف بهذا الباركود في النظام"
+                            txtItemName.text = ""
+                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = L("لا يوجد صنف بهذا الباركود في النظام", "No item with this barcode")
                             setBadgeStyle("#78350F", "#F59E0B", "#D97706")
                         } else {
                             playToneSuccess()
                             vibrateSuccess()
                             bumpScanCount()
-                            showTopResult("✅ تم الاستلام", "#15803D")
+                            showTopResult(L("✅ تم الاستلام", "✅ Received"), "#15803D")
                             speak("تم الاستلام", "Received")
                             txtItemName.text = ""
-                            txtItemDetails.text = "الباركود: $code"
-                            txtStatusBadge.text = "✅ تم النقل بنجاح"
+                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = L("✅ تم النقل بنجاح", "✅ Transferred")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
                     }
@@ -870,22 +967,22 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             playToneSuccess(); vibrateSuccess()
                             bumpScanCount()
-                            showTopResult("✅ تم الاستلام", "#15803D")
+                            showTopResult(L("✅ تم الاستلام", "✅ Received"), "#15803D")
                             speak("تم الاستلام", "Received")
                             txtItemName.text = ""
-                            txtItemDetails.text = "الباركود: $code"
-                            txtStatusBadge.text = "✅ تم الاستلام بنجاح"
+                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = L("✅ تم الاستلام بنجاح", "✅ Received")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
                     } else {
                         // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسح
                         runOnUiThread {
                             playToneError(); vibrateError()
-                            showTopResult("🔴 لم يصل إلى النظام — أعِد المسح", "#B91C1C")
+                            showTopResult(L("🔴 لم يصل إلى النظام — أعِد المسح", "🔴 Not sent — scan again"), "#B91C1C")
                             speak("لم يصل إلى النظام، أعد المسح", "Not sent, scan again")
-                            txtItemName.text = "🔴 فشل الإرسال — الخادم ردّ بخطأ (${response.code})"
-                            txtItemDetails.text = "الباركود: $code — أعِد المسح"
-                            txtStatusBadge.text = "❌ لم يُرسَل — أعد المسح"
+                            txtItemName.text = ""
+                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = L("❌ لم يُرسَل — أعد المسح", "❌ Not sent — scan again") + " (${response.code})"
                             setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
                         }
                     }

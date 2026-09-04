@@ -79,7 +79,22 @@
             android:elevation="6dp" />
     </LinearLayout>
 
-    <!-- زر فتح الإعدادات (أعلى اليمين) -->
+    <!-- ★ زرُّ القائمة (☰) — يجمعُ كلَّ الأوامر مثلَ تطبيقاتِ الجوال -->
+    <Button
+        android:id="@+id/btnMenu"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_margin="14dp"
+        android:background="#99000000"
+        android:text="☰"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:contentDescription="القائمة" />
+
+    <!-- الأزرارُ القديمةُ صارتْ أوامرَ داخلَ القائمة (☰) — نُبقيها مخفيّةً كوظائفَ يناديها الكود -->
     <ImageButton
         android:id="@+id/btnSettings"
         android:layout_width="48dp"
@@ -90,9 +105,9 @@
         android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_menu_preferences"
-        android:contentDescription="Settings" />
+        android:contentDescription="Settings"
+        android:visibility="gone" />
 
-    <!-- زر الكشّاف -->
     <ImageButton
         android:id="@+id/btnTorch"
         android:layout_width="48dp"
@@ -104,9 +119,9 @@
         android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_menu_day"
-        android:contentDescription="Torch" />
+        android:contentDescription="Torch"
+        android:visibility="gone" />
 
-    <!-- زر تحديث الحالة/إعادة فحص الاتصال -->
     <ImageButton
         android:id="@+id/btnRefresh"
         android:layout_width="48dp"
@@ -118,7 +133,8 @@
         android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_popup_sync"
-        android:contentDescription="تحديث الحالة" />
+        android:contentDescription="تحديث الحالة"
+        android:visibility="gone" />
 
     <!-- ═══ شاشةُ الإعداداتِ المعتمةُ الكاملة (تُغطّي الخلفيّةَ تماماً) ═══ -->
     <ScrollView
@@ -144,6 +160,7 @@
                     android:layout_height="wrap_content"
                     android:layout_alignParentStart="true"
                     android:layout_centerVertical="true"
+                    android:id="@+id/lblSettingsTitle"
                     android:text="⚙️ الإعدادات"
                     android:textColor="#38BDF8"
                     android:textSize="16sp"
@@ -168,6 +185,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="18dp"
+                android:id="@+id/lblConn"
                 android:text="الاتصال بالخادم المحاسبي"
                 android:textColor="#38BDF8"
                 android:textSize="14sp"
@@ -235,6 +253,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:id="@+id/lblVoiceSection"
                 android:text="التنبيه الصوتي"
                 android:textColor="#38BDF8"
                 android:textSize="14sp"
@@ -254,6 +273,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
+                android:id="@+id/lblVoiceLang"
                 android:text="لغة الصوت:"
                 android:textColor="#94A3B8"
                 android:textSize="13sp" />
@@ -305,6 +325,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:id="@+id/lblRelinkHint"
                 android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
                 android:textColor="#94A3B8"
                 android:textSize="12sp"
