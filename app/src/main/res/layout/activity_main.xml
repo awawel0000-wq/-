@@ -18,102 +18,68 @@
         android:layout_centerInParent="true"
         android:background="@drawable/scanner_box_border" />
 
-    <!-- ★ لوحةُ النتيجةِ الكبيرةُ فوقَ الإطارِ الأخضرِ مباشرةً:
-         تعرضُ ردَّ الخادمِ لحظةَ المسحِ أمامَ عينِ الجارِدِ بلا نظرٍ للأسفل. -->
-    <TextView
-        android:id="@+id/txtResultTop"
-        android:layout_width="wrap_content"
+    <!-- ★ العمودُ العلويُّ فوقَ الإطارِ الأخضر: الدخول ← لوحةُ النتيجة ← عدّادُ المسحات -->
+    <LinearLayout
+        android:id="@+id/headerStack"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_above="@id/scanBox"
         android:layout_centerHorizontal="true"
-        android:layout_marginBottom="14dp"
-        android:layout_marginStart="24dp"
-        android:layout_marginEnd="24dp"
-        android:maxWidth="360dp"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="12dp"
-        android:text="وجّه الكاميرا نحو الباركود…"
-        android:textColor="#F8FAFC"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:textAlignment="center"
-        android:gravity="center"
-        android:elevation="8dp" />
+        android:layout_marginBottom="12dp"
+        android:orientation="vertical"
+        android:gravity="center_horizontal">
 
-    <!-- زر الانتقال إلى الموقع (jawwal) داخل التطبيق -->
-    <Button
-        android:id="@+id/btnSite"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentTop="true"
-        android:layout_alignParentStart="true"
-        android:layout_margin="16dp"
-        android:minHeight="48dp"
-        android:maxWidth="230dp"
-        android:background="#1C6FBF"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:text="🏠 الدخول إلى نظام الأوائل المحاسبي"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:textSize="12sp" />
+        <!-- زرُّ الدخول إلى نظام الأوائل (jawwal) — أعلى العمود -->
+        <Button
+            android:id="@+id/btnSite"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:maxWidth="320dp"
+            android:background="#1C6FBF"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="🏠 الدخول إلى نظام الأوائل المحاسبي"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:textSize="13sp" />
 
-    <!-- ★ اختيارُ لغةِ الصوتِ (بالأعلى): يبدّلُ نطقَ النتيجةِ بين العربيّةِ والإنجليزيّة -->
-    <Button
-        android:id="@+id/btnLang"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/btnSite"
-        android:layout_alignParentStart="true"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="6dp"
-        android:background="#0F766E"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:text="🌐 صوت: عربي"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:textSize="12sp" />
+        <!-- لوحةُ النتيجةِ — تعرضُ ردَّ الخادمِ وتبقى ظاهرةً (اسمُ الصنفِ والسعرُ بعدَ النجاح) -->
+        <TextView
+            android:id="@+id/txtResultTop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:maxWidth="340dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="9dp"
+            android:paddingBottom="9dp"
+            android:text="وجّه الكاميرا نحو الباركود…"
+            android:textColor="#F8FAFC"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:elevation="6dp" />
 
-    <!-- ★ زرُّ الحلّ: يظهرُ فقط إن اختِيرَ العربيُّ والجهازُ لا يدعمُه — يفتحُ تثبيتَ أصواتِ TTS -->
-    <Button
-        android:id="@+id/btnInstallVoice"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/btnLang"
-        android:layout_alignParentStart="true"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="6dp"
-        android:background="#B45309"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:text="⬇ تحميل صوت عربي"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:textSize="12sp"
-        android:visibility="gone" />
+        <!-- عدّادُ مسحاتِ الجلسة — أسفلَ اللوحة -->
+        <TextView
+            android:id="@+id/txtScanCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="5dp"
+            android:paddingBottom="5dp"
+            android:text="المسحات: 0"
+            android:textColor="#F8FAFC"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:elevation="6dp" />
+    </LinearLayout>
 
-    <!-- ★ عدّادُ مسحاتِ الجلسةِ (وسطَ الأعلى): ثقةٌ أثناءَ الجردِ وتطابقٌ مع شاشةِ الكمبيوتر -->
-    <TextView
-        android:id="@+id/txtScanCount"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentTop="true"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="20dp"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:text="المسحات: 0"
-        android:textColor="#F8FAFC"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        android:elevation="6dp" />
-
-    <!-- زر فتح الإعدادات (في الأعلى) -->
+    <!-- زر فتح الإعدادات (أعلى اليمين) -->
     <ImageButton
         android:id="@+id/btnSettings"
         android:layout_width="48dp"
@@ -121,7 +87,7 @@
         android:layout_alignParentTop="true"
         android:layout_alignParentEnd="true"
         android:layout_margin="16dp"
-        android:background="#80000000"
+        android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_menu_preferences"
         android:contentDescription="Settings" />
@@ -135,12 +101,12 @@
         android:layout_alignParentEnd="true"
         android:layout_marginEnd="16dp"
         android:layout_marginTop="8dp"
-        android:background="#80000000"
+        android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_menu_day"
         android:contentDescription="Torch" />
 
-    <!-- زر تحديث الحالة/إعادة فحص الاتصال (بدل إعادة تشغيل البرنامج) -->
+    <!-- زر تحديث الحالة/إعادة فحص الاتصال -->
     <ImageButton
         android:id="@+id/btnRefresh"
         android:layout_width="48dp"
@@ -149,129 +115,214 @@
         android:layout_alignParentEnd="true"
         android:layout_marginEnd="16dp"
         android:layout_marginTop="8dp"
-        android:background="#80000000"
+        android:background="#99000000"
         android:padding="10dp"
         android:src="@android:drawable/ic_popup_sync"
         android:contentDescription="تحديث الحالة" />
 
-    <!-- لوحة ضبط الـ IP والبورت (مخفية) -->
-    <LinearLayout
-        android:id="@+id/layoutSettings"
+    <!-- ═══ شاشةُ الإعداداتِ المعتمةُ الكاملة (تُغطّي الخلفيّةَ تماماً) ═══ -->
+    <ScrollView
+        android:id="@+id/settingsPanel"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/btnSite"
-        android:background="#E61E293B"
-        android:orientation="vertical"
-        android:padding="20dp"
+        android:layout_height="match_parent"
+        android:background="#0F172A"
         android:visibility="gone">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="إعدادات الاتصال بالخادم المحاسبي"
-            android:textColor="#38BDF8"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/edtServerIp"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="#0F172A"
-            android:hint="عنوان IP الكمبيوتر (مثال: 192.168.1.100)"
-            android:padding="10dp"
-            android:textColor="#FFFFFF"
-            android:textColorHint="#94A3B8" />
+            android:orientation="vertical"
+            android:padding="20dp">
 
-        <EditText
-            android:id="@+id/edtServerPort"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="#0F172A"
-            android:hint="البورت (افتراضي: 5005)"
-            android:inputType="number"
-            android:padding="10dp"
-            android:textColor="#FFFFFF"
-            android:textColorHint="#94A3B8" />
+            <!-- شريطُ العنوانِ + زرُّ الإغلاق -->
+            <RelativeLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
 
-        <Button
-            android:id="@+id/btnTestConnection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="#334155"
-            android:text="فحص الاتصال"
-            android:textColor="#FFFFFF" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentStart="true"
+                    android:layout_centerVertical="true"
+                    android:text="⚙️ الإعدادات"
+                    android:textColor="#38BDF8"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/txtTestResult"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textColor="#38BDF8"
-            android:textAlignment="center"
-            android:visibility="gone" />
+                <Button
+                    android:id="@+id/btnCloseSettings"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_alignParentEnd="true"
+                    android:background="#334155"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="✕ إغلاق"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold"
+                    android:textSize="13sp" />
+            </RelativeLayout>
 
-        <Button
-            android:id="@+id/btnSaveSettings"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="#0284C7"
-            android:text="حفظ الإعدادات"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold" />
+            <!-- ─── الاتصال بالخادم ─── -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="الاتصال بالخادم المحاسبي"
+                android:textColor="#38BDF8"
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
-        <!-- فاصل -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="12dp"
-            android:background="#334155" />
+            <EditText
+                android:id="@+id/edtServerIp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#0B1220"
+                android:hint="عنوان IP الكمبيوتر (مثال: 192.168.1.100)"
+                android:padding="10dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#94A3B8" />
 
-        <!-- ★ طريقةُ التنبيه: رنّةٌ (الافتراضي) أو نطقٌ صوتيٌّ يقولُ اسمَ الصنفِ والنتيجة -->
-        <Switch
-            android:id="@+id/switchVoice"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)"
-            android:textColor="#F8FAFC"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+            <EditText
+                android:id="@+id/edtServerPort"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#0B1220"
+                android:hint="البورت (افتراضي: 5005)"
+                android:inputType="number"
+                android:padding="10dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#94A3B8" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="يقولُ الجوّالُ اسمَ الصنفِ عند النجاح، و«لم يصل إلى النظام» عند الفشل. إن لم يدعمِ الجهازُ النطقَ العربيَّ يرجعُ تلقائياً للرنّة."
-            android:textColor="#94A3B8"
-            android:textSize="11sp" />
+            <Button
+                android:id="@+id/btnTestConnection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#334155"
+                android:text="فحص الاتصال"
+                android:textColor="#FFFFFF" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
-            android:textColor="#94A3B8"
-            android:textSize="12sp"
-            android:textAlignment="center" />
+            <TextView
+                android:id="@+id/txtTestResult"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="#38BDF8"
+                android:textAlignment="center"
+                android:visibility="gone" />
 
-        <!-- زر: أعد الربط بمسح الباركود (QR) -->
-        <Button
-            android:id="@+id/btnScanLink"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="#168568"
-            android:text="📷 مسح رمز الربط بالكاميرا"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold" />
-    </LinearLayout>
+            <Button
+                android:id="@+id/btnSaveSettings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="#0284C7"
+                android:text="حفظ الإعدادات"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
 
-    <!-- شريط المسحات المعلقة -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="18dp"
+                android:background="#334155" />
+
+            <!-- ─── الصوتُ واللغة ─── -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="التنبيه الصوتي"
+                android:textColor="#38BDF8"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <Switch
+                android:id="@+id/switchVoice"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)"
+                android:textColor="#F8FAFC"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="لغة الصوت:"
+                android:textColor="#94A3B8"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnLang"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="#0F766E"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:text="🌐 صوت: عربي"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnInstallVoice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="#B45309"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:text="⬇ تحميل صوت عربي"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/txtVoiceHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="عند النجاح يقول اسم الصنف، وعند الفشل «لم يصل إلى النظام»."
+                android:textColor="#94A3B8"
+                android:textSize="11sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="18dp"
+                android:background="#334155" />
+
+            <!-- ─── إعادةُ الربطِ بالكاميرا ─── -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
+                android:textColor="#94A3B8"
+                android:textSize="12sp"
+                android:textAlignment="center" />
+
+            <Button
+                android:id="@+id/btnScanLink"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="#168568"
+                android:text="📷 مسح رمز الربط بالكاميرا"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- شريط المسحات المعلقة (مُلغى — مخفي) -->
     <LinearLayout
         android:id="@+id/layoutPendingQueue"
         android:layout_width="match_parent"
@@ -292,7 +343,7 @@
             android:textAlignment="center" />
     </LinearLayout>
 
-    <!-- بطاقة الحالة والنتيجة في الأسفل -->
+    <!-- بطاقة الحالة والنتيجة في الأسفل (تبقى ظاهرةً: الاسم + السعر) -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
@@ -334,7 +385,6 @@
             android:textSize="13sp"
             android:textAlignment="center" />
 
-        <!-- عناصر الحالة (نقطة + نص) مخفية بصريّاً لكن موجودة للكود -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -359,12 +409,11 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ═══ الموقع (jawwal) داخل التطبيق — يظهر عند الضغط على «الموقع» ═══ -->
+    <!-- ═══ الموقع (jawwal) داخل التطبيق ═══ -->
     <WebView
         android:id="@+id/web"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone" />
-
 
 </RelativeLayout>

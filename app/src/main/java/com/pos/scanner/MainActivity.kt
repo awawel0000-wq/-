@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var layoutPendingQueue: LinearLayout
     private lateinit var txtPendingCount: TextView
     private lateinit var bottomBar: LinearLayout
-    private lateinit var layoutSettings: LinearLayout
+    private lateinit var layoutSettings: View       // شاشةُ الإعداداتِ (ScrollView معتمٌ كاملٌ)
     private lateinit var edtServerIp: EditText
     private lateinit var edtServerPort: EditText
     private lateinit var btnTestConnection: Button
@@ -56,10 +56,11 @@ class MainActivity : AppCompatActivity() {
     private var btnInstallVoice: Button? = null        // ★ زرُّ تحميلِ صوتِ TTS العربي (يظهرُ عند الحاجة)
     private var txtScanCount: TextView? = null         // ★ عدّادُ مسحاتِ الجلسة
     private var scanCount = 0                            // عددُ المسحاتِ الناجحةِ هذه الجلسة
-    private var hideRunnable: Runnable? = null          // مؤقّتُ إخفاءِ لوحةِ النتيجة
     private var tts: TextToSpeech? = null             // ★ محرّكُ النطق
     private var ttsReady = false                      // جاهزٌ للنطق؟
     private var ttsArabicOk = false                   // هل النطقُ العربيُّ مدعومٌ على هذا الجهاز؟
+    private var ttsArabicMissingData = false          // العربيُّ موجودٌ لكن يحتاجُ تنزيلَ بياناتِ الصوت؟
+    private var arabicLocale = Locale("ar")           // أفضلُ صيغةٍ عربيّةٍ مدعومةٍ على الجهاز
     private var voiceOn = false                        // مفعّلٌ من الإعدادات؟ (الافتراضي: رنّة)
     private lateinit var prefs: SharedPreferences
     private val httpClient = OkHttpClient.Builder()
@@ -138,7 +139,10 @@ class MainActivity : AppCompatActivity() {
         txtPendingCount = findViewById(R.id.txtPendingCount)
         bottomBar = findViewById(R.id.bottomBar)
         layoutPendingQueue.visibility = View.GONE   // لا قائمةَ انتظار — أُلغِيَ الحفظُ المحلي
-        layoutSettings = findViewById(R.id.layoutSettings)
+        layoutSettings = findViewById(R.id.settingsPanel)
+        findViewById<Button>(R.id.btnCloseSettings).setOnClickListener {
+            layoutSettings.visibility = View.GONE
+        }
         edtServerIp = findViewById(R.id.edtServerIp)
         edtServerPort = findViewById(R.id.edtServerPort)
         btnTestConnection = findViewById(R.id.btnTestConnection)
@@ -148,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         txtItemDetails = findViewById(R.id.txtItemDetails)
         txtStatusBadge = findViewById(R.id.txtStatusBadge)
         txtResultTop = findViewById(R.id.txtResultTop)
-        showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A", autoHide = false)
+        showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A")
         switchVoice = findViewById(R.id.switchVoice)
         switchVoice?.isChecked = prefs.getBoolean("voice_feedback", false)
         switchVoice?.setOnCheckedChangeListener { _, checked ->
@@ -293,7 +297,11 @@ class MainActivity : AppCompatActivity() {
             siteLoaded = true
         }
         w.visibility = View.VISIBLE
-        // نحن الآن داخل الموقع: أخفِ أزرار الماسح (العودة تكون من زرٍّ داخل الموقع أو زرّ الرجوع)
+        w.bringToFront()
+        // نحن الآن داخل الموقع: أخفِ عناصرَ الماسحِ كلَّها — لا سيّما العمودَ العلويَّ المرفوعَ بـ elevation
+        //   (وإلّا طفا فوقَ صفحةِ الموقع). العودةُ من زرٍّ داخل الموقعِ أو زرِّ الرجوع.
+        findViewById<View>(R.id.headerStack).visibility = View.GONE
+        bottomBar.visibility = View.GONE
         btnSite?.visibility = View.GONE
         btnSettings.visibility = View.GONE
         btnTorch.visibility = View.GONE
@@ -305,7 +313,9 @@ class MainActivity : AppCompatActivity() {
         val w = web ?: return
         if (scanForSite) stopSiteScan()   // احتياطاً: أوقفْ وضعَ مسح الموقع إن كان مفعّلاً
         w.visibility = View.GONE
-        // عُدنا للماسح: أرجِع أزراره
+        // عُدنا للماسح: أرجِع عناصرَه
+        findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
+        bottomBar.visibility = View.VISIBLE
         btnSite?.visibility = View.VISIBLE
         btnSettings.visibility = View.VISIBLE
         btnTorch.visibility = View.VISIBLE
@@ -314,6 +324,7 @@ class MainActivity : AppCompatActivity() {
         // نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
         previewView.bringToFront()                       // الكاميرا خلفية
         (findViewById<View>(R.id.scanBox))?.bringToFront() // المستطيلُ الأخضرُ الثابت
+        findViewById<View>(R.id.headerStack).bringToFront() // العمودُ العلوي
         bottomBar.bringToFront()                          // شريطُ البياناتِ السفلي
         btnSite?.bringToFront(); btnSettings.bringToFront(); btnTorch.bringToFront()
         findViewById<View>(R.id.btnRefresh).bringToFront()
@@ -328,26 +339,47 @@ class MainActivity : AppCompatActivity() {
         voiceOn = prefs.getBoolean("voice_feedback", false)
     }
 
-    // ★ محرّكُ النطق (TTS): يُهيّأُ مرّةً واحدةً. نُجرّبُ العربيّةَ؛ فإن لم تُدعمْ نرجعُ للإنجليزيّة،
-    //   فإن لم تُدعمْ أصلاً يبقى النطقُ مُعطّلاً وتعملُ الرنّةُ وحدَها (سقوطٌ آمنٌ لا يكسِرُ شيئاً).
+    // ★ محرّكُ النطق (TTS): نُفضّلُ محرّكَ Google (فيه العربيّةُ غالباً) إن كان مثبّتاً،
+    //   ثمّ نكشفُ العربيّةَ بدقّةٍ عبرَ عدّةِ صيغٍ لا صيغةٍ واحدة.
     private fun initTts() {
         try {
-            tts = TextToSpeech(this) { status ->
+            val listener = TextToSpeech.OnInitListener { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    val ar = try { tts?.setLanguage(Locale("ar")) } catch (e: Exception) { TextToSpeech.LANG_NOT_SUPPORTED }
-                    ttsArabicOk = (ar == TextToSpeech.LANG_AVAILABLE ||
-                                   ar == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
-                                   ar == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE)
-                    if (!ttsArabicOk) {
-                        try { tts?.setLanguage(Locale.ENGLISH) } catch (e: Exception) {}
-                    }
-                    tts?.setSpeechRate(1.0f)
                     ttsReady = true
-                    // صارَ دعمُ العربيّةِ معروفاً ⇒ حدّثْ زرَّ اللغةِ وأظهرْ/أخفِ زرَّ التحميل
+                    detectArabic()
+                    tts?.setSpeechRate(1.0f)
                     runOnUiThread { applyLangUi(false) }
                 }
             }
+            val engine = pickTtsEngine()
+            tts = if (engine != null) TextToSpeech(this, listener, engine) else TextToSpeech(this, listener)
         } catch (e: Exception) { ttsReady = false }
+    }
+
+    // ★ يُفضّلُ محرّكَ Google للنطقِ إن كان مثبّتاً (دعمُه للعربيّةِ أوسع).
+    private fun pickTtsEngine(): String? {
+        return try {
+            val g = "com.google.android.tts"
+            packageManager.getPackageInfo(g, 0)
+            g
+        } catch (e: Exception) { null }
+    }
+
+    // ★ كشفٌ دقيقٌ للعربيّة: نُجرّبُ ar / ar-SA / ar-EG ونأخذُ الأفضل.
+    //   متوفّرٌ ⇒ نُفعّلُه · يحتاجُ بياناتٍ ⇒ نُظهرُ زرَّ التحميلِ (لا نقولُ «لا يدعم»).
+    private fun detectArabic() {
+        val locales = listOf(Locale("ar"), Locale("ar", "SA"), Locale("ar", "EG"))
+        var best = TextToSpeech.LANG_NOT_SUPPORTED
+        for (l in locales) {
+            val r = try { tts?.isLanguageAvailable(l) ?: TextToSpeech.LANG_NOT_SUPPORTED }
+                    catch (e: Exception) { TextToSpeech.LANG_NOT_SUPPORTED }
+            if (r > best) { best = r; if (r >= TextToSpeech.LANG_AVAILABLE) arabicLocale = l }
+        }
+        ttsArabicOk = (best >= TextToSpeech.LANG_AVAILABLE)
+        ttsArabicMissingData = (best == TextToSpeech.LANG_MISSING_DATA)
+        try {
+            if (ttsArabicOk) tts?.setLanguage(arabicLocale) else tts?.setLanguage(Locale.ENGLISH)
+        } catch (e: Exception) {}
     }
 
     // ★ خلفيّةٌ دائريّةُ الحواف — لتوحيدِ شكلِ الأزرارِ واللوحات.
@@ -380,10 +412,14 @@ class MainActivity : AppCompatActivity() {
     private fun applyLangUi(announce: Boolean) {
         updateLangButton()
         val lang = prefs.getString("voice_lang", "ar") ?: "ar"
-        val arabicUnsupported = (lang == "ar" && ttsReady && !ttsArabicOk)
-        btnInstallVoice?.visibility = if (arabicUnsupported) View.VISIBLE else View.GONE
-        if (arabicUnsupported && announce) {
-            showTopResult("⚠️ هذا الجهاز لا يدعم النطق العربي — اضغط «⬇ تحميل صوت عربي»", "#B45309")
+        val arabicUnavailable = (lang == "ar" && ttsReady && !ttsArabicOk)
+        btnInstallVoice?.visibility = if (arabicUnavailable) View.VISIBLE else View.GONE
+        if (arabicUnavailable && announce) {
+            val msg = if (ttsArabicMissingData)
+                "⬇ الصوت العربي يحتاج تنزيلاً — اضغط «تحميل صوت عربي»"
+            else
+                "⚠️ محرّك النطق الحالي لا يدعم العربي — اضغط «تحميل صوت عربي» أو استخدم Google TTS"
+            showTopResult(msg, "#B45309")
         }
     }
 
@@ -406,41 +442,28 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread { txtScanCount?.text = "المسحات: $scanCount" }
     }
 
-    // ★ يُعيدُ لوحةَ النتيجةِ إلى حالةِ الانتظارِ المحايدة (بعدَ الإخفاءِ التلقائي).
-    private fun showIdleBanner() {
-        txtResultTop.text = "وجّه الكاميرا نحو الباركود…"
-        txtResultTop.background = roundBg("#CC0F172A", 22f)
-    }
-
-    // ★ نطقٌ: يتبعُ لغةَ الصوتِ المختارةَ من الأعلى (عربي/إنجليزي).
-    //   لو اختِيرَ العربيُّ والجهازُ لا يدعمُه ⇒ يرجعُ للإنجليزيّ تلقائياً. لا يعملُ إلا إن فُعّلَ الخيار.
+    // ★ نطقٌ: يتبعُ لغةَ الصوتِ المختارة (عربي/إنجليزي) والصيغةَ العربيّةَ المدعومةَ فعلاً على الجهاز.
+    //   لو اختِيرَ العربيُّ وهو غيرُ متاحٍ ⇒ يرجعُ للإنجليزيّ. لا يعملُ إلا إن فُعّلَ الخيار.
     private fun speak(ar: String, en: String) {
         if (!voiceOn || !ttsReady) return
         val lang = prefs.getString("voice_lang", "ar") ?: "ar"
         val say: String
         val loc: Locale
         if (lang == "en") { say = en; loc = Locale.ENGLISH }
-        else if (ttsArabicOk) { say = ar; loc = Locale("ar") }
-        else { say = en; loc = Locale.ENGLISH }   // عربيٌّ مطلوبٌ لكنّه غيرُ مدعومٍ ⇒ سقوطٌ آمن
+        else if (ttsArabicOk) { say = ar; loc = arabicLocale }
+        else { say = en; loc = Locale.ENGLISH }   // عربيٌّ مطلوبٌ لكنّه غيرُ متاحٍ ⇒ سقوطٌ آمن
         try {
             tts?.setLanguage(loc)
             tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, "scan_" + System.currentTimeMillis())
         } catch (e: Exception) {}
     }
 
-    // ★ يعرضُ ردَّ الخادمِ كبيراً فوقَ الإطارِ الأخضرِ بلونٍ يدلُّ على الحالة.
-    //   autoHide ⇒ يعودُ للحالةِ المحايدةِ بعدَ ٣ ثوانٍ (تُلغى إن جاءتْ مسحةٌ جديدة).
-    private fun showTopResult(text: String, bgHex: String, autoHide: Boolean = true) {
+    // ★ يعرضُ ردَّ الخادمِ فوقَ الإطارِ الأخضر — ويبقى ظاهراً (لا يختفي) حتى المسحةِ التالية.
+    private fun showTopResult(text: String, bgHex: String) {
         runOnUiThread {
             txtResultTop.text = text
-            txtResultTop.background = roundBg(bgHex, 22f)
+            txtResultTop.background = roundBg(bgHex, 18f)
             txtResultTop.visibility = View.VISIBLE
-            hideRunnable?.let { heartbeatHandler.removeCallbacks(it) }
-            if (autoHide) {
-                val r = Runnable { showIdleBanner() }
-                hideRunnable = r
-                heartbeatHandler.postDelayed(r, 3000)
-            }
         }
     }
     private fun getServerUrl(): String {
@@ -786,7 +809,8 @@ class MainActivity : AppCompatActivity() {
                             playToneSuccess()
                             vibrateSuccess()
                             bumpScanCount()
-                            showTopResult("✅ $itemName", "#15803D")
+                            val topText = if (itemPrice.isNotEmpty()) "✅ $itemName — $itemPrice₪" else "✅ $itemName"
+                            showTopResult(topText, "#15803D")
                             speak(itemName, "Received")
                             txtItemName.text = itemName
                             txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  |  الباركود: $code" else "الباركود: $code"
@@ -904,6 +928,11 @@ class MainActivity : AppCompatActivity() {
         val w = web
         if (w != null && w.visibility == View.VISIBLE) { closeSite(); return }
         super.onBackPressed()
+    }
+    // بعدَ العودةِ للتطبيق (مثلاً بعد تثبيتِ صوتِ عربيّ) نُعيدُ كشفَ العربيّةِ ونحدّثُ الواجهة.
+    override fun onResume() {
+        super.onResume()
+        if (ttsReady) { detectArabic(); applyLangUi(false) }
     }
     override fun onDestroy() {
         super.onDestroy()
