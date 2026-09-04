@@ -105,19 +105,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        try {
-            // STREAM_ALARM: أعلى صوتاً وأوضح — يتجاوز الوضع الصامت غالباً · المستوى 100 = الأقصى
-            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
-        } catch (e: Exception) {
-            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) } catch (_: Exception) {}
-        }
-        // ارفع صوت الإنذار للأقصى برمجياً، فلا يفوت الكاشيرَ صوتُ المسح
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val maxAlarm = am.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            am.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
-        } catch (e: Exception) { e.printStackTrace() }
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
+        // لا نلمسُ صوتَ الجهازِ إطلاقاً — نستعملُ مستوى صوتٍ داخليّاً في التطبيقِ فقط.
+        buildToneGenerator()
         initTts()
         initViews()
         loadSettings()
@@ -200,6 +190,18 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString("ui_lang", sel).apply()
                 recreate()
             }
+        }
+        // ★ مستوى صوتِ التنبيه (داخليّ) — زرّا − و + يغيّران النسبةَ ويشغّلان نغمةَ تجربة.
+        val txtVolVal = findViewById<TextView>(R.id.txtVolVal)
+        fun showVol() { txtVolVal.text = (soundVol() * 100).toInt().toString() + "%" }
+        showVol()
+        findViewById<Button>(R.id.btnVolMinus).setOnClickListener {
+            val p = ((soundVol() * 100).toInt() - 10).coerceAtLeast(5)
+            prefs.edit().putFloat("sound_vol", p / 100f).apply(); showVol(); buildToneGenerator(); playToneSuccess()
+        }
+        findViewById<Button>(R.id.btnVolPlus).setOnClickListener {
+            val p = ((soundVol() * 100).toInt() + 10).coerceAtMost(100)
+            prefs.edit().putFloat("sound_vol", p / 100f).apply(); showVol(); buildToneGenerator(); playToneSuccess()
         }
         txtScanCount = findViewById(R.id.txtScanCount)
         txtScanCount?.background = roundBg("#CC0F172A", 20f)
@@ -364,6 +366,20 @@ class MainActivity : AppCompatActivity() {
         voiceOn = prefs.getBoolean("voice_feedback", false)
     }
 
+    // ★ مستوى الصوتِ الداخليُّ (0..1) — يتحكّمُ به المستخدمُ من الإعدادات بلا مساسٍ بصوتِ الجهاز.
+    private fun soundVol(): Float = (prefs.getFloat("sound_vol", 1.0f)).coerceIn(0.05f, 1.0f)
+
+    // ★ يبني مولّدَ النغماتِ بمستوى الصوتِ الحاليِّ (يُعاد بناؤه عند تغييرِ المستوى).
+    private fun buildToneGenerator() {
+        try { toneGenerator?.release() } catch (e: Exception) {}
+        val vol = (soundVol() * 100).toInt().coerceIn(1, 100)
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, vol)
+        } catch (e: Exception) {
+            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, vol) } catch (_: Exception) {}
+        }
+    }
+
     // ★ محرّكُ النطق (TTS): نُفضّلُ محرّكَ Google إن وُجد؛ فإن فشلَتْ تهيئتُه نرجعُ للمحرّكِ الافتراضيِّ تلقائياً
     //   (حتى لا يبقى النطقُ صامتاً بسببِ محرّكٍ واحدٍ فاشلِ التهيئة).
     private fun initTts() {
@@ -436,26 +452,30 @@ class MainActivity : AppCompatActivity() {
     //   announce=true ⇒ يُظهرُ الرسالةَ (عند اختيارِ المستخدمِ العربيَّ غيرَ المدعوم).
     private fun applyLangUi(announce: Boolean) {
         val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        // زرُّ إدارةِ الأصواتِ ظاهرٌ دائماً — لإضافةِ/تغييرِ/تحميلِ أيِّ صوتٍ وقتما شاء المستخدم.
+        btnInstallVoice?.visibility = View.VISIBLE
         val arabicUnavailable = (lang == "ar" && ttsReady && !ttsArabicOk)
-        btnInstallVoice?.visibility = if (arabicUnavailable) View.VISIBLE else View.GONE
         if (arabicUnavailable && announce) {
             val msg = if (ttsArabicMissingData)
-                "⬇ الصوت العربي يحتاج تنزيلاً — اضغط «تحميل صوت عربي»"
+                "⬇ الصوت العربي يحتاج تنزيلاً — افتح «تحميل / تغيير أصوات الجهاز»"
             else
-                "⚠️ محرّك النطق الحالي لا يدعم العربي — اضغط «تحميل صوت عربي» أو استخدم Google TTS"
+                "⚠️ محرّك النطق الحالي لا يدعم العربي — افتح «تحميل / تغيير أصوات الجهاز» أو ثبّت Google TTS"
             showTopResult(msg, "#B45309")
         }
     }
 
-    // ★ يفتحُ شاشةَ تثبيتِ أصواتِ TTS في أندرويد (حلٌّ بضغطة). إن تعذّر ⇒ إعداداتُ النطق.
+    // ★ يفتحُ شاشةَ أصواتِ الجهازِ (تحويلُ النصِّ إلى كلام): منها يُضيفُ لغةَ صوتٍ أو يغيّرُ المحرّكَ أو
+    //   يعدّلُ السرعة. إن تعذّرتْ نجرّبُ شاشةَ تثبيتِ بياناتِ الصوت، ثمّ نرشدُ يدويّاً.
     private fun openTtsInstall() {
         try {
-            startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
+            val i = Intent("com.android.settings.TTS_SETTINGS")
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
         } catch (e: Exception) {
             try {
-                startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
             } catch (e2: Exception) {
-                Toast.makeText(this, "افتح إعدادات الجهاز ← اللغة ← تحويل النص إلى كلام", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "افتح إعدادات الجهاز ← الإدارة العامة/اللغة ← تحويل النص إلى كلام", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -516,6 +536,8 @@ class MainActivity : AppCompatActivity() {
             "أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر",
             "Or switch device by scanning the link QR from the computer")
         findViewById<Button>(R.id.btnScanLink).text = L("📷 مسح رمز الربط بالكاميرا", "📷 Scan link QR")
+        btnInstallVoice?.text = L("🗣 تحميل / تغيير أصوات الجهاز", "🗣 Install / change device voices")
+        findViewById<TextView>(R.id.lblSoundVol).text = L("مستوى صوت التنبيه:", "Alert volume:")
         txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount
     }
 
@@ -634,7 +656,7 @@ class MainActivity : AppCompatActivity() {
             // نُوجّهُ النطقَ لقناةِ الإنذارِ (المرفوعةِ للأقصى مثلَ الرنّة) فلا يضيعُ الصوتُ لو كانتْ قناةُ الوسائطِ منخفضة
             val params = Bundle()
             params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
-            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, soundVol())
             tts?.speak(say, TextToSpeech.QUEUE_FLUSH, params, "scan_" + System.currentTimeMillis())
         } catch (e: Exception) {}
     }
