@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -87,6 +88,17 @@ class MainActivity : AppCompatActivity() {
     private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
     private var overlayScan: View? = null
     private var scanFrame: View? = null      // الإطارُ الأخضر (يتحرّك مع الكاميرا عند السحب)
+    // ★ لغةُ البرنامجِ تضبطُ اتجاهَ الواجهةِ (RTL عربي / LTR إنجليزي) على كلِّ شيءٍ حتى القوائمِ والحوارات.
+    override fun attachBaseContext(base: Context) {
+        val lang = base.getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
+            .getString("ui_lang", "ar") ?: "ar"
+        val loc = java.util.Locale(lang)
+        java.util.Locale.setDefault(loc)
+        val cfg = Configuration(base.resources.configuration)
+        cfg.setLocale(loc)
+        cfg.setLayoutDirection(loc)
+        super.attachBaseContext(base.createConfigurationContext(cfg))
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -170,14 +182,7 @@ class MainActivity : AppCompatActivity() {
         // لمسةٌ على العدّادِ تصفّرُه (بتأكيد).
         txtScanCount?.setOnClickListener { confirmResetCounter() }
         applyLangUi(false)
-        btnLang?.setOnClickListener {
-            val cur = prefs.getString("voice_lang", "ar") ?: "ar"
-            val next = if (cur == "ar") "en" else "ar"
-            prefs.edit().putString("voice_lang", next).apply()
-            applyLangUi(true)   // يُظهرُ رسالةَ «لا يدعم» + زرَّ التحميلِ إن اختِيرَ عربيٌّ غيرُ مدعوم
-            if (next == "en") speak("English voice", "English voice")
-            else if (ttsArabicOk) speak("الصوت العربي", "Arabic voice")
-        }
+        btnLang?.setOnClickListener { toggleVoiceLang() }
         styleTopButtons()
         btnTorch.setOnClickListener { toggleTorch() }
         btnSettings.setOnClickListener {
@@ -471,11 +476,11 @@ class MainActivity : AppCompatActivity() {
     private fun L(ar: String, en: String): String =
         if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") en else ar
 
-    // ★ يبدّلُ لغةَ واجهةِ البرنامجِ فوراً بلا إعادةِ تشغيل.
+    // ★ يبدّلُ لغةَ واجهةِ البرنامج، ثمّ يُعيدُ بناءَ الشاشةِ ليطبّقَ الاتجاهَ (RTL/LTR) على كلِّ شيء.
     private fun toggleUiLang() {
         val cur = prefs.getString("ui_lang", "ar") ?: "ar"
         prefs.edit().putString("ui_lang", if (cur == "ar") "en" else "ar").apply()
-        applyLanguage()
+        recreate()
     }
 
     // ★ يطبّقُ لغةَ الواجهةِ على كلِّ النصوصِ الثابتةِ + اتجاهِ التخطيط (RTL عربي / LTR إنجليزي).
@@ -504,30 +509,47 @@ class MainActivity : AppCompatActivity() {
         txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount
     }
 
-    // ★ القائمة (☰): تجمعُ كلَّ الأوامرِ مثلَ تطبيقاتِ الجوال.
+    // ★ القائمة (☰): قائمةٌ نظيفةٌ موحّدةُ الاتجاهِ مثلَ تطبيقاتِ الجوال — تشملُ لغةَ الصوتِ ولغةَ البرنامج.
     private fun showMainMenu(anchor: View) {
-        val pm = android.widget.PopupMenu(this, anchor)
-        val m = pm.menu
-        m.add(0, 1, 0, L("💡 الكشّاف", "💡 Torch"))
-        m.add(0, 2, 1, L("📷 إعادة الربط (QR)", "📷 Re-link (QR)"))
-        m.add(0, 3, 2, L("🔌 إعدادات الاتصال", "🔌 Connection settings"))
-        m.add(0, 4, 3, L("🌐 لغة البرنامج: عربي", "🌐 App language: English"))
-        m.add(0, 5, 4, L("🔄 تحديث الحالة", "🔄 Refresh status"))
-        m.add(0, 6, 5, L("🔢 تصفير العدّاد", "🔢 Reset counter"))
-        m.add(0, 7, 6, L("ℹ️ عن التطبيق", "ℹ️ About"))
-        pm.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                1 -> toggleTorch()
-                2 -> startRelink()
-                3 -> openSettings()
-                4 -> toggleUiLang()
-                5 -> refreshStatus()
-                6 -> confirmResetCounter()
-                7 -> showAbout()
+        val vl = if ((prefs.getString("voice_lang", "ar") ?: "ar") == "en") "English" else "عربي"
+        val ul = if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") "English" else "عربي"
+        val items = arrayOf(
+            L("💡 الكشّاف", "💡 Torch"),
+            L("📷 إعادة الربط (QR)", "📷 Re-link (QR)"),
+            L("🔌 إعدادات الاتصال", "🔌 Connection settings"),
+            L("🌐 لغة البرنامج ($ul)", "🌐 App language ($ul)"),
+            L("🔊 لغة الصوت ($vl)", "🔊 Voice language ($vl)"),
+            L("⬇ تحميل صوت TTS (إن لم يوجد)", "⬇ Install TTS voice (if missing)"),
+            L("🔄 تحديث الحالة", "🔄 Refresh status"),
+            L("🔢 تصفير العدّاد", "🔢 Reset counter"),
+            L("ℹ️ عن التطبيق", "ℹ️ About")
+        )
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(L("القائمة", "Menu"))
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> toggleTorch()
+                    1 -> startRelink()
+                    2 -> openSettings()
+                    3 -> toggleUiLang()
+                    4 -> toggleVoiceLang()
+                    5 -> openTtsInstall()
+                    6 -> refreshStatus()
+                    7 -> confirmResetCounter()
+                    8 -> showAbout()
+                }
             }
-            true
-        }
-        pm.show()
+            .show()
+    }
+
+    // ★ تبديلُ لغةِ الصوتِ (عربي/إنجليزي) — من القائمةِ أو من زرِّ الإعدادات.
+    private fun toggleVoiceLang() {
+        val cur = prefs.getString("voice_lang", "ar") ?: "ar"
+        val next = if (cur == "ar") "en" else "ar"
+        prefs.edit().putString("voice_lang", next).apply()
+        applyLangUi(true)
+        if (next == "en") speak("English voice", "English voice")
+        else if (ttsArabicOk) speak("الصوت العربي", "Arabic voice")
     }
 
     // ★ فتحُ/إغلاقُ الإعدادات: نخفي عمودَ الماسحِ والشريطَ السفليَّ حتى لا يطفوا فوقَ الإعدادات (elevation).
