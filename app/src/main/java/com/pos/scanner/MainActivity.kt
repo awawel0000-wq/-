@@ -2,6 +2,7 @@ package com.pos.scanner
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -9,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.*
+import android.speech.tts.TextToSpeech
 import android.util.Size
 import android.view.View
 import android.widget.*
@@ -26,6 +28,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +50,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtItemName: TextView
     private lateinit var txtItemDetails: TextView
     private lateinit var txtStatusBadge: TextView
+    private lateinit var txtResultTop: TextView       // ★ لوحةُ النتيجةِ فوقَ الإطارِ الأخضر
+    private var switchVoice: Switch? = null           // ★ خيارُ النطقِ الصوتي في الإعدادات
+    private var btnLang: Button? = null                // ★ زرُّ اختيارِ لغةِ الصوت (بالأعلى)
+    private var btnInstallVoice: Button? = null        // ★ زرُّ تحميلِ صوتِ TTS العربي (يظهرُ عند الحاجة)
+    private var txtScanCount: TextView? = null         // ★ عدّادُ مسحاتِ الجلسة
+    private var scanCount = 0                            // عددُ المسحاتِ الناجحةِ هذه الجلسة
+    private var hideRunnable: Runnable? = null          // مؤقّتُ إخفاءِ لوحةِ النتيجة
+    private var tts: TextToSpeech? = null             // ★ محرّكُ النطق
+    private var ttsReady = false                      // جاهزٌ للنطق؟
+    private var ttsArabicOk = false                   // هل النطقُ العربيُّ مدعومٌ على هذا الجهاز؟
+    private var voiceOn = false                        // مفعّلٌ من الإعدادات؟ (الافتراضي: رنّة)
     private lateinit var prefs: SharedPreferences
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -88,6 +102,7 @@ class MainActivity : AppCompatActivity() {
             am.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
         } catch (e: Exception) { e.printStackTrace() }
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
+        initTts()
         initViews()
         loadSettings()
         if (allPermissionsGranted()) {
@@ -132,6 +147,30 @@ class MainActivity : AppCompatActivity() {
         txtItemName = findViewById(R.id.txtItemName)
         txtItemDetails = findViewById(R.id.txtItemDetails)
         txtStatusBadge = findViewById(R.id.txtStatusBadge)
+        txtResultTop = findViewById(R.id.txtResultTop)
+        showTopResult("وجّه الكاميرا نحو الباركود…", "#CC0F172A", autoHide = false)
+        switchVoice = findViewById(R.id.switchVoice)
+        switchVoice?.isChecked = prefs.getBoolean("voice_feedback", false)
+        switchVoice?.setOnCheckedChangeListener { _, checked ->
+            voiceOn = checked
+            prefs.edit().putBoolean("voice_feedback", checked).apply()
+            if (checked) speak("النطق الصوتي مفعّل", "Voice feedback on")
+        }
+        btnLang = findViewById(R.id.btnLang)
+        btnInstallVoice = findViewById(R.id.btnInstallVoice)
+        btnInstallVoice?.setOnClickListener { openTtsInstall() }
+        txtScanCount = findViewById(R.id.txtScanCount)
+        txtScanCount?.background = roundBg("#CC0F172A", 20f)
+        applyLangUi(false)
+        btnLang?.setOnClickListener {
+            val cur = prefs.getString("voice_lang", "ar") ?: "ar"
+            val next = if (cur == "ar") "en" else "ar"
+            prefs.edit().putString("voice_lang", next).apply()
+            applyLangUi(true)   // يُظهرُ رسالةَ «لا يدعم» + زرَّ التحميلِ إن اختِيرَ عربيٌّ غيرُ مدعوم
+            if (next == "en") speak("English voice", "English voice")
+            else if (ttsArabicOk) speak("الصوت العربي", "Arabic voice")
+        }
+        styleTopButtons()
         btnTorch.setOnClickListener { toggleTorch() }
         btnSettings.setOnClickListener {
             layoutSettings.visibility = if (layoutSettings.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -286,6 +325,123 @@ class MainActivity : AppCompatActivity() {
     private fun loadSettings() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
         edtServerPort.setText(prefs.getString("server_port", "5005"))
+        voiceOn = prefs.getBoolean("voice_feedback", false)
+    }
+
+    // ★ محرّكُ النطق (TTS): يُهيّأُ مرّةً واحدةً. نُجرّبُ العربيّةَ؛ فإن لم تُدعمْ نرجعُ للإنجليزيّة،
+    //   فإن لم تُدعمْ أصلاً يبقى النطقُ مُعطّلاً وتعملُ الرنّةُ وحدَها (سقوطٌ آمنٌ لا يكسِرُ شيئاً).
+    private fun initTts() {
+        try {
+            tts = TextToSpeech(this) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val ar = try { tts?.setLanguage(Locale("ar")) } catch (e: Exception) { TextToSpeech.LANG_NOT_SUPPORTED }
+                    ttsArabicOk = (ar == TextToSpeech.LANG_AVAILABLE ||
+                                   ar == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
+                                   ar == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE)
+                    if (!ttsArabicOk) {
+                        try { tts?.setLanguage(Locale.ENGLISH) } catch (e: Exception) {}
+                    }
+                    tts?.setSpeechRate(1.0f)
+                    ttsReady = true
+                    // صارَ دعمُ العربيّةِ معروفاً ⇒ حدّثْ زرَّ اللغةِ وأظهرْ/أخفِ زرَّ التحميل
+                    runOnUiThread { applyLangUi(false) }
+                }
+            }
+        } catch (e: Exception) { ttsReady = false }
+    }
+
+    // ★ خلفيّةٌ دائريّةُ الحواف — لتوحيدِ شكلِ الأزرارِ واللوحات.
+    private fun roundBg(hex: String, radius: Float): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+            setColor(Color.parseColor(hex))
+        }
+
+    // ★ توحيدُ شكلِ الأزرارِ العلويّة: زجاجٌ داكنٌ دائريُّ الحوافِّ متناسق.
+    private fun styleTopButtons() {
+        val glass = "#99000000"
+        btnSettings.background = roundBg(glass, 24f)
+        btnTorch.background = roundBg(glass, 24f)
+        findViewById<View>(R.id.btnRefresh).background = roundBg(glass, 24f)
+        btnSite?.background = roundBg("#E01C6FBF", 16f)
+        btnLang?.background = roundBg("#E00F766E", 16f)
+        btnInstallVoice?.background = roundBg("#E0B45309", 16f)
+    }
+
+    // ★ يُحدّثُ نصَّ زرِّ لغةِ الصوتِ حسبَ الاختيارِ المحفوظ.
+    private fun updateLangButton() {
+        val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        btnLang?.text = if (lang == "en") "🌐 Voice: EN" else "🌐 صوت: عربي"
+    }
+
+    // ★ يضبطُ واجهةَ اللغة: نصَّ الزرِّ + إظهارَ/إخفاءَ زرِّ التحميلِ + رسالةَ «لا يدعم» عند الحاجة.
+    //   announce=true ⇒ يُظهرُ الرسالةَ بصوتٍ عالٍ (عند ضغطِ المستخدمِ على العربيِّ غيرِ المدعوم).
+    private fun applyLangUi(announce: Boolean) {
+        updateLangButton()
+        val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        val arabicUnsupported = (lang == "ar" && ttsReady && !ttsArabicOk)
+        btnInstallVoice?.visibility = if (arabicUnsupported) View.VISIBLE else View.GONE
+        if (arabicUnsupported && announce) {
+            showTopResult("⚠️ هذا الجهاز لا يدعم النطق العربي — اضغط «⬇ تحميل صوت عربي»", "#B45309")
+        }
+    }
+
+    // ★ يفتحُ شاشةَ تثبيتِ أصواتِ TTS في أندرويد (حلٌّ بضغطة). إن تعذّر ⇒ إعداداتُ النطق.
+    private fun openTtsInstall() {
+        try {
+            startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+            } catch (e2: Exception) {
+                Toast.makeText(this, "افتح إعدادات الجهاز ← اللغة ← تحويل النص إلى كلام", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // ★ يزيدُ عدّادَ مسحاتِ الجلسة (المسحاتُ الناجحةُ التي وصلتِ النظام).
+    private fun bumpScanCount() {
+        scanCount++
+        runOnUiThread { txtScanCount?.text = "المسحات: $scanCount" }
+    }
+
+    // ★ يُعيدُ لوحةَ النتيجةِ إلى حالةِ الانتظارِ المحايدة (بعدَ الإخفاءِ التلقائي).
+    private fun showIdleBanner() {
+        txtResultTop.text = "وجّه الكاميرا نحو الباركود…"
+        txtResultTop.background = roundBg("#CC0F172A", 22f)
+    }
+
+    // ★ نطقٌ: يتبعُ لغةَ الصوتِ المختارةَ من الأعلى (عربي/إنجليزي).
+    //   لو اختِيرَ العربيُّ والجهازُ لا يدعمُه ⇒ يرجعُ للإنجليزيّ تلقائياً. لا يعملُ إلا إن فُعّلَ الخيار.
+    private fun speak(ar: String, en: String) {
+        if (!voiceOn || !ttsReady) return
+        val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        val say: String
+        val loc: Locale
+        if (lang == "en") { say = en; loc = Locale.ENGLISH }
+        else if (ttsArabicOk) { say = ar; loc = Locale("ar") }
+        else { say = en; loc = Locale.ENGLISH }   // عربيٌّ مطلوبٌ لكنّه غيرُ مدعومٍ ⇒ سقوطٌ آمن
+        try {
+            tts?.setLanguage(loc)
+            tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, "scan_" + System.currentTimeMillis())
+        } catch (e: Exception) {}
+    }
+
+    // ★ يعرضُ ردَّ الخادمِ كبيراً فوقَ الإطارِ الأخضرِ بلونٍ يدلُّ على الحالة.
+    //   autoHide ⇒ يعودُ للحالةِ المحايدةِ بعدَ ٣ ثوانٍ (تُلغى إن جاءتْ مسحةٌ جديدة).
+    private fun showTopResult(text: String, bgHex: String, autoHide: Boolean = true) {
+        runOnUiThread {
+            txtResultTop.text = text
+            txtResultTop.background = roundBg(bgHex, 22f)
+            txtResultTop.visibility = View.VISIBLE
+            hideRunnable?.let { heartbeatHandler.removeCallbacks(it) }
+            if (autoHide) {
+                val r = Runnable { showIdleBanner() }
+                hideRunnable = r
+                heartbeatHandler.postDelayed(r, 3000)
+            }
+        }
     }
     private fun getServerUrl(): String {
         val ip = prefs.getString("server_ip", "192.168.1.100")?.trim() ?: "192.168.1.100"
@@ -583,6 +739,8 @@ class MainActivity : AppCompatActivity() {
         if (!isPaired) {
             runOnUiThread {
                 playToneError(); vibrateError()
+                showTopResult("🔴 لست مقترناً — امسح رمز الربط", "#B91C1C")
+                speak("لست مقترنا، امسح رمز الربط", "Not linked, scan the link code")
                 txtItemName.text = "🔴 فشل — لست مقترناً بالخادم"
                 txtItemDetails.text = "الباركود: $code — يجب الاقتران أولاً"
                 txtStatusBadge.text = "❌ اضغط \"أعد الربط\" وامسح رمز الربط (QR) من الكمبيوتر"
@@ -608,6 +766,8 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     playToneError()
                     vibrateError()
+                    showTopResult("🔴 لم يصل إلى النظام — أعِد المسح", "#B91C1C")
+                    speak("لم يصل إلى النظام، أعد المسح", "Not sent, scan again")
                     txtItemName.text = "🔴 فشل — غير متصل بالخادم"
                     txtItemDetails.text = "الباركود: $code — تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل، ثم أعِد المسح"
                     txtStatusBadge.text = "❌ لم يُرسَل — انقطاع الاتصال بالخادم"
@@ -625,6 +785,9 @@ class MainActivity : AppCompatActivity() {
                         if (response.isSuccessful && isFound) {
                             playToneSuccess()
                             vibrateSuccess()
+                            bumpScanCount()
+                            showTopResult("✅ $itemName", "#15803D")
+                            speak(itemName, "Received")
                             txtItemName.text = itemName
                             txtItemDetails.text = if (itemPrice.isNotEmpty()) "السعر: $itemPrice ₪  |  الباركود: $code" else "الباركود: $code"
                             txtStatusBadge.text = "✅ تم الإرسال والإضافة للفاتورة"
@@ -632,6 +795,8 @@ class MainActivity : AppCompatActivity() {
                         } else if (!isFound || response.code == 404) {
                             playToneWarning()
                             vibrateWarning()
+                            showTopResult("⚠️ صنف غير معرّف", "#B45309")
+                            speak("صنف غير معرّف", "Unknown item")
                             txtItemName.text = "⚠️ صنف غير معرّف!"
                             txtItemDetails.text = "الباركود: $code"
                             txtStatusBadge.text = "لا يوجد صنف بهذا الباركود في النظام"
@@ -639,6 +804,9 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             playToneSuccess()
                             vibrateSuccess()
+                            bumpScanCount()
+                            showTopResult("✅ تم الاستلام", "#15803D")
+                            speak("تم الاستلام", "Received")
                             txtItemName.text = "الباركود: $code"
                             txtItemDetails.text = "تم الاستلام بنجاح"
                             txtStatusBadge.text = "✅ تم النقل بنجاح"
@@ -651,6 +819,9 @@ class MainActivity : AppCompatActivity() {
                     if (response.isSuccessful) {
                         runOnUiThread {
                             playToneSuccess(); vibrateSuccess()
+                            bumpScanCount()
+                            showTopResult("✅ تم الاستلام", "#15803D")
+                            speak("تم الاستلام", "Received")
                             txtItemName.text = "الباركود: $code"
                             txtItemDetails.text = "تم الاستلام بنجاح"
                             txtStatusBadge.text = "✅ تم الاستلام بنجاح"
@@ -660,6 +831,8 @@ class MainActivity : AppCompatActivity() {
                         // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسح
                         runOnUiThread {
                             playToneError(); vibrateError()
+                            showTopResult("🔴 لم يصل إلى النظام — أعِد المسح", "#B91C1C")
+                            speak("لم يصل إلى النظام، أعد المسح", "Not sent, scan again")
                             txtItemName.text = "🔴 فشل الإرسال — الخادم ردّ بخطأ (${response.code})"
                             txtItemDetails.text = "الباركود: $code — أعِد المسح"
                             txtStatusBadge.text = "❌ لم يُرسَل — أعد المسح"
@@ -736,5 +909,6 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         heartbeatHandler.removeCallbacksAndMessages(null)
         toneGenerator?.release()
+        try { tts?.stop(); tts?.shutdown() } catch (e: Exception) {}
     }
 }

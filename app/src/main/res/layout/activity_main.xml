@@ -18,21 +18,100 @@
         android:layout_centerInParent="true"
         android:background="@drawable/scanner_box_border" />
 
+    <!-- ★ لوحةُ النتيجةِ الكبيرةُ فوقَ الإطارِ الأخضرِ مباشرةً:
+         تعرضُ ردَّ الخادمِ لحظةَ المسحِ أمامَ عينِ الجارِدِ بلا نظرٍ للأسفل. -->
+    <TextView
+        android:id="@+id/txtResultTop"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/scanBox"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="14dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:maxWidth="360dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:text="وجّه الكاميرا نحو الباركود…"
+        android:textColor="#F8FAFC"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:textAlignment="center"
+        android:gravity="center"
+        android:elevation="8dp" />
+
     <!-- زر الانتقال إلى الموقع (jawwal) داخل التطبيق -->
     <Button
         android:id="@+id/btnSite"
         android:layout_width="wrap_content"
-        android:layout_height="48dp"
+        android:layout_height="wrap_content"
         android:layout_alignParentTop="true"
         android:layout_alignParentStart="true"
         android:layout_margin="16dp"
+        android:minHeight="48dp"
+        android:maxWidth="230dp"
         android:background="#1C6FBF"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:text="↩ الموقع"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:text="🏠 الدخول إلى نظام الأوائل المحاسبي"
         android:textColor="#FFFFFF"
         android:textStyle="bold"
-        android:textSize="14sp" />
+        android:textSize="12sp" />
+
+    <!-- ★ اختيارُ لغةِ الصوتِ (بالأعلى): يبدّلُ نطقَ النتيجةِ بين العربيّةِ والإنجليزيّة -->
+    <Button
+        android:id="@+id/btnLang"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/btnSite"
+        android:layout_alignParentStart="true"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="6dp"
+        android:background="#0F766E"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:text="🌐 صوت: عربي"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold"
+        android:textSize="12sp" />
+
+    <!-- ★ زرُّ الحلّ: يظهرُ فقط إن اختِيرَ العربيُّ والجهازُ لا يدعمُه — يفتحُ تثبيتَ أصواتِ TTS -->
+    <Button
+        android:id="@+id/btnInstallVoice"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/btnLang"
+        android:layout_alignParentStart="true"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="6dp"
+        android:background="#B45309"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:text="⬇ تحميل صوت عربي"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- ★ عدّادُ مسحاتِ الجلسةِ (وسطَ الأعلى): ثقةٌ أثناءَ الجردِ وتطابقٌ مع شاشةِ الكمبيوتر -->
+    <TextView
+        android:id="@+id/txtScanCount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="20dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:text="المسحات: 0"
+        android:textColor="#F8FAFC"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:elevation="6dp" />
 
     <!-- زر فتح الإعدادات (في الأعلى) -->
     <ImageButton
@@ -151,6 +230,25 @@
             android:layout_height="1dp"
             android:layout_marginTop="12dp"
             android:background="#334155" />
+
+        <!-- ★ طريقةُ التنبيه: رنّةٌ (الافتراضي) أو نطقٌ صوتيٌّ يقولُ اسمَ الصنفِ والنتيجة -->
+        <Switch
+            android:id="@+id/switchVoice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)"
+            android:textColor="#F8FAFC"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="يقولُ الجوّالُ اسمَ الصنفِ عند النجاح، و«لم يصل إلى النظام» عند الفشل. إن لم يدعمِ الجهازُ النطقَ العربيَّ يرجعُ تلقائياً للرنّة."
+            android:textColor="#94A3B8"
+            android:textSize="11sp" />
 
         <TextView
             android:layout_width="match_parent"
