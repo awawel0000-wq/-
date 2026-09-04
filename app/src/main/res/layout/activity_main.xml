@@ -180,166 +180,228 @@
                     android:textSize="13sp" />
             </RelativeLayout>
 
-            <!-- ─── الاتصال بالخادم ─── -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:id="@+id/lblConn"
-                android:text="الاتصال بالخادم المحاسبي"
-                android:textColor="#38BDF8"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <EditText
-                android:id="@+id/edtServerIp"
+            <!-- ═══ قسمُ الربطِ: الاتصالُ اليدويُّ + مسحُ QR ═══ -->
+            <LinearLayout
+                android:id="@+id/secConn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="#0B1220"
-                android:hint="عنوان IP الكمبيوتر (مثال: 192.168.1.100)"
-                android:padding="10dp"
-                android:textColor="#FFFFFF"
-                android:textColorHint="#94A3B8" />
+                android:orientation="vertical">
 
-            <EditText
-                android:id="@+id/edtServerPort"
+                <TextView
+                    android:id="@+id/lblConn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="الاتصال اليدوي بالخادم"
+                    android:textColor="#38BDF8"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/edtServerIp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="#0B1220"
+                    android:hint="عنوان IP الكمبيوتر (مثال: 192.168.1.100)"
+                    android:padding="10dp"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#94A3B8" />
+
+                <EditText
+                    android:id="@+id/edtServerPort"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="#0B1220"
+                    android:hint="البورت (افتراضي: 5005)"
+                    android:inputType="number"
+                    android:padding="10dp"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#94A3B8" />
+
+                <Button
+                    android:id="@+id/btnTestConnection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="#334155"
+                    android:text="فحص الاتصال"
+                    android:textColor="#FFFFFF" />
+
+                <TextView
+                    android:id="@+id/txtTestResult"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textColor="#38BDF8"
+                    android:textAlignment="center"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/btnSaveSettings"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="#0284C7"
+                    android:text="حفظ الإعدادات"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="18dp"
+                    android:background="#334155" />
+
+                <TextView
+                    android:id="@+id/lblRelinkHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
+                    android:textColor="#94A3B8"
+                    android:textSize="12sp"
+                    android:textAlignment="center" />
+
+                <Button
+                    android:id="@+id/btnScanLink"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="#168568"
+                    android:text="📷 مسح رمز الربط بالكاميرا"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- ═══ قسمُ اللغةِ والصوت: 4 اختيارات مستقلّة + تفعيل + تحميل ═══ -->
+            <LinearLayout
+                android:id="@+id/secLang"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="#0B1220"
-                android:hint="البورت (افتراضي: 5005)"
-                android:inputType="number"
-                android:padding="10dp"
-                android:textColor="#FFFFFF"
-                android:textColorHint="#94A3B8" />
+                android:orientation="vertical"
+                android:visibility="gone">
 
-            <Button
-                android:id="@+id/btnTestConnection"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="#334155"
-                android:text="فحص الاتصال"
-                android:textColor="#FFFFFF" />
+                <TextView
+                    android:id="@+id/lblVoiceSection"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="الصوت"
+                    android:textColor="#38BDF8"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/txtTestResult"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textColor="#38BDF8"
-                android:textAlignment="center"
-                android:visibility="gone" />
+                <CheckBox
+                    android:id="@+id/switchVoice"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="🔊 تفعيل النطق الصوتي بالنتيجة"
+                    android:textColor="#F8FAFC"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/btnSaveSettings"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="#0284C7"
-                android:text="حفظ الإعدادات"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold" />
+                <TextView
+                    android:id="@+id/lblVoiceLang"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="لغة الصوت:"
+                    android:textColor="#94A3B8"
+                    android:textSize="13sp" />
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="18dp"
-                android:background="#334155" />
+                <RadioGroup
+                    android:id="@+id/rgVoiceLang"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal">
 
-            <!-- ─── الصوتُ واللغة ─── -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:id="@+id/lblVoiceSection"
-                android:text="التنبيه الصوتي"
-                android:textColor="#38BDF8"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                    <RadioButton
+                        android:id="@+id/rbVoiceAr"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="عربي"
+                        android:textColor="#F8FAFC"
+                        android:textSize="14sp"
+                        android:paddingEnd="24dp" />
 
-            <Switch
-                android:id="@+id/switchVoice"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)"
-                android:textColor="#F8FAFC"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                    <RadioButton
+                        android:id="@+id/rbVoiceEn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="English"
+                        android:textColor="#F8FAFC"
+                        android:textSize="14sp" />
+                </RadioGroup>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:id="@+id/lblVoiceLang"
-                android:text="لغة الصوت:"
-                android:textColor="#94A3B8"
-                android:textSize="13sp" />
+                <Button
+                    android:id="@+id/btnInstallVoice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="#B45309"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="⬇ تحميل صوت TTS"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold"
+                    android:textSize="13sp"
+                    android:visibility="gone" />
 
-            <Button
-                android:id="@+id/btnLang"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:background="#0F766E"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:text="🌐 صوت: عربي"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold"
-                android:textSize="13sp" />
+                <TextView
+                    android:id="@+id/txtVoiceHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="عند النجاح يقول اسم الصنف، وعند الفشل «لم يصل إلى النظام»."
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp" />
 
-            <Button
-                android:id="@+id/btnInstallVoice"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="#B45309"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:text="⬇ تحميل صوت عربي"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold"
-                android:textSize="13sp"
-                android:visibility="gone" />
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="18dp"
+                    android:background="#334155" />
 
-            <TextView
-                android:id="@+id/txtVoiceHint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="عند النجاح يقول اسم الصنف، وعند الفشل «لم يصل إلى النظام»."
-                android:textColor="#94A3B8"
-                android:textSize="11sp" />
+                <TextView
+                    android:id="@+id/lblUiLang"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="لغة البرنامج:"
+                    android:textColor="#38BDF8"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="18dp"
-                android:background="#334155" />
+                <RadioGroup
+                    android:id="@+id/rgUiLang"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal">
 
-            <!-- ─── إعادةُ الربطِ بالكاميرا ─── -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:id="@+id/lblRelinkHint"
-                android:text="أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر"
-                android:textColor="#94A3B8"
-                android:textSize="12sp"
-                android:textAlignment="center" />
+                    <RadioButton
+                        android:id="@+id/rbUiAr"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="عربي"
+                        android:textColor="#F8FAFC"
+                        android:textSize="14sp"
+                        android:paddingEnd="24dp" />
 
-            <Button
-                android:id="@+id/btnScanLink"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:background="#168568"
-                android:text="📷 مسح رمز الربط بالكاميرا"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold" />
+                    <RadioButton
+                        android:id="@+id/rbUiEn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="English"
+                        android:textColor="#F8FAFC"
+                        android:textSize="14sp" />
+                </RadioGroup>
+            </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
 
