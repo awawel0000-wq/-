@@ -565,6 +565,7 @@ class MainActivity : AppCompatActivity() {
             L("💡 الكشّاف", "💡 Torch"),
             L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael"),
             L("🌐 اللغة والصوت", "🌐 Language & voice"),
+            L("🗣️ نمط النطق", "🗣️ Speech mode"),
             L("🔠 حجم الخط", "🔠 Font size"),
             L("🔄 تحديث الحالة", "🔄 Refresh status"),
             L("🔢 تصفير العدّاد", "🔢 Reset counter"),
@@ -577,10 +578,11 @@ class MainActivity : AppCompatActivity() {
                     0 -> toggleTorch()
                     1 -> openLinkPanel()
                     2 -> openLangPanel()
-                    3 -> openFontDialog()
-                    4 -> refreshStatus()
-                    5 -> confirmResetCounter()
-                    6 -> showAbout()
+                    3 -> chooseSpeakMode()
+                    4 -> openFontDialog()
+                    5 -> refreshStatus()
+                    6 -> confirmResetCounter()
+                    7 -> showAbout()
                 }
             }
             .show()
@@ -663,6 +665,7 @@ class MainActivity : AppCompatActivity() {
     //   لو اختِيرَ العربيُّ وهو غيرُ متاحٍ ⇒ يرجعُ للإنجليزيّ. لا يعملُ إلا إن فُعّلَ الخيار.
     private fun speak(ar: String, en: String) {
         if (!voiceOn || !ttsReady) return
+        if ((prefs.getString("speak_mode", "first") ?: "first") == "beep") return   // صفيرٌ فقط ⇒ لا نطقَ للرسائل
         val lang = prefs.getString("voice_lang", "ar") ?: "ar"
         val say: String
         val loc: Locale
@@ -677,6 +680,49 @@ class MainActivity : AppCompatActivity() {
             params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, soundVol())
             tts?.speak(say, TextToSpeech.QUEUE_FLUSH, params, "scan_" + System.currentTimeMillis())
         } catch (e: Exception) {}
+    }
+
+    // ★ نطقُ اسمِ الصنفِ حسبَ الوضعِ المختار: نطقٌ كامل / الكلمة الأولى (سرعة) / صفيرٌ فقط.
+    //   يعيدُ true إن نطقَ فعلاً (فيستغني النداءُ عن الصفير)، false إن لم ينطقْ (صفيرٌ/معطّل).
+    private fun speakItem(ar: String, en: String): Boolean {
+        if (!voiceOn || !ttsReady) return false
+        val mode = prefs.getString("speak_mode", "first") ?: "first"
+        if (mode == "beep") return false
+        val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        var say: String; val loc: Locale
+        if (lang == "en") { say = en; loc = Locale.ENGLISH }
+        else if (ttsArabicOk) { say = ar; loc = arabicLocale }
+        else { say = en; loc = Locale.ENGLISH }
+        if (mode == "first") { say = say.trim().split(Regex("\\s+")).firstOrNull { it.isNotBlank() } ?: say }
+        return try {
+            tts?.setLanguage(loc)
+            val params = Bundle()
+            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, soundVol())
+            tts?.speak(say, TextToSpeech.QUEUE_FLUSH, params, "item_" + System.currentTimeMillis())
+            true
+        } catch (e: Exception) { false }
+    }
+
+    // ★ اختيارُ نمطِ النطق (المتّفقُ عليه): نطقٌ كامل / الكلمة الأولى / صفيرٌ فقط — يحكمُ البيعَ والجردَ معاً.
+    private fun chooseSpeakMode() {
+        val modes = arrayOf("full", "first", "beep")
+        val labels = arrayOf(
+            L("🗣️ نطق الاسم كاملاً", "🗣️ Speak full name"),
+            L("⚡ الكلمة الأولى فقط (أسرع)", "⚡ First word only (faster)"),
+            L("🔔 صفيرٌ فقط بلا نطق", "🔔 Beep only (no speech)")
+        )
+        val cur = prefs.getString("speak_mode", "first") ?: "first"
+        val sel = modes.indexOf(cur).let { if (it < 0) 1 else it }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(L("نمط النطق", "Speech mode"))
+            .setSingleChoiceItems(labels, sel) { d, which ->
+                prefs.edit().putString("speak_mode", modes[which]).apply()
+                if (modes[which] != "beep") speakItem(L("تمام", "Okay"), "Okay")
+                d.dismiss()
+            }
+            .setNegativeButton(L("إغلاق", "Close"), null)
+            .show()
     }
 
     // ★ يعرضُ ردَّ الخادمِ فوقَ الإطارِ الأخضر — ويبقى ظاهراً (لا يختفي) حتى المسحةِ التالية.
@@ -1042,7 +1088,7 @@ class MainActivity : AppCompatActivity() {
                             bumpScanCount()
                             // الاسمُ فوقَ الإطارِ الأخضر (كما طلبت)، والسعرُ والباركودُ في الأسفلِ فقط — بلا تكرارٍ للاسم.
                             showTopResult("✅ $itemName", "#15803D")
-                            speak(itemName, "Received")
+                            speakItem(itemName, "Received")   // يتبعُ نمطَ النطق (كامل/كلمة أولى/صفير)
                             txtItemName.text = ""
                             txtItemDetails.text = if (itemPrice.isNotEmpty())
                                 L("السعر: ", "Price: ") + "$itemPrice ₪  ·  " + L("الباركود: ", "Barcode: ") + code
@@ -1254,9 +1300,12 @@ class MainActivity : AppCompatActivity() {
             line.put("ts", nowTs()); line.put("synced", false)
         }
         saveStkLines()
+        val spokenName = name
         runOnUiThread {
             vibrateSuccess()
-            if (name.isNotBlank()) speakFirstWordStk(name) else playToneSuccess()
+            // يتبعُ نمطَ النطقِ المختار (كامل/كلمة أولى/صفير)؛ إن لم ينطقْ ⇒ صفير.
+            val spoke = if (spokenName.isNotBlank()) speakItem(spokenName, spokenName) else false
+            if (!spoke) playToneSuccess()
             renderStkList()
         }
         trySyncStocktake()   // مزامنةٌ صامتةٌ إن كنّا متصلين
