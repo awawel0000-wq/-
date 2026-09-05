@@ -135,7 +135,24 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
         }
         startHeartbeat()
+        restoreActiveStocktake()   // 🧮 استئنافُ جلسةِ الجردِ إن كانت مفتوحةً قبلَ الإغلاق (يعملُ دونَ اتصال)
     }
+
+    // 🧮 يستأنفُ جلسةَ الجردِ المحفوظةَ محلياً (بعدَ إغلاقِ التطبيقِ أو انقطاعِ الشبكة) — بلا حاجةٍ لإعادةِ الربط.
+    private fun restoreActiveStocktake() {
+        val asid = prefs.getString("stk_active_sid", "") ?: ""
+        if (asid.isBlank()) return
+        stkSessionId = asid
+        stkCode = prefs.getString("stk_active_code", "") ?: ""
+        stkName = prefs.getString("stk_active_name", "") ?: ""
+        stkCounter = prefs.getString("stk_active_counter", "") ?: ""
+        stkRetain = prefs.getInt("stk_active_retain", 30)
+        stkActive = true
+        loadStkLines(asid)               // يستعيدُ المسحاتِ والفهرسَ المخزّنَ (أسماءٌ تعملُ دونَ اتصال)
+        window.decorView.post { showStocktakeUI(); renderStkList() }
+        downloadCatalog()                // تحديثُ الأسماءِ إن كانتْ هناك شبكةٌ (يُتجاهَلُ بأمانٍ دونَ اتصال)
+    }
+
     // بعد منحِ إذنِ الكاميرا أوّلَ مرّة: شغّلِ الكاميرا فوراً (بلا حاجةٍ لإغلاقِ التطبيقِ وفتحِه)
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -1226,6 +1243,14 @@ class MainActivity : AppCompatActivity() {
             }
             stkSessionId = sid; stkCode = ccode; stkName = name; stkCounter = counter; stkRetain = retain
             stkActive = true
+            // 🧮 نحفظُ الجلسةَ النشطةَ محلياً لتُستأنَفَ تلقائيّاً بعدَ إغلاقِ التطبيقِ أو انقطاعِ الشبكة
+            prefs.edit()
+                .putString("stk_active_sid", sid)
+                .putString("stk_active_code", ccode)
+                .putString("stk_active_name", name)
+                .putString("stk_active_counter", counter)
+                .putInt("stk_active_retain", retain)
+                .apply()
             loadStkLines(sid)          // استرجاعُ ما حُفظ محلياً لهذه الجلسة (إن وُجد)
             runOnUiThread {
                 playToneSuccess(); vibrateSuccess()
@@ -1653,6 +1678,9 @@ class MainActivity : AppCompatActivity() {
         stkActive = false
         stkOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
         stkOverlay = null; stkListLayout = null; stkPendingText = null; stkTitleText = null
+        // امسحِ علامةَ الجلسةِ النشطةِ فلا تُستأنَفُ بعدَ الخروجِ الصريح (البياناتُ تبقى محفوظةً في stk_lines_)
+        prefs.edit().remove("stk_active_sid").remove("stk_active_code")
+            .remove("stk_active_name").remove("stk_active_counter").remove("stk_active_retain").apply()
         try { findViewById<View>(R.id.scanBox)?.visibility = View.VISIBLE } catch (e: Exception) {}
         bottomBar.visibility = View.VISIBLE
         btnSite?.visibility = View.VISIBLE
