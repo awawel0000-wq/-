@@ -142,15 +142,44 @@ class MainActivity : AppCompatActivity() {
     private fun restoreActiveStocktake() {
         val asid = prefs.getString("stk_active_sid", "") ?: ""
         if (asid.isBlank()) return
-        stkSessionId = asid
-        stkCode = prefs.getString("stk_active_code", "") ?: ""
-        stkName = prefs.getString("stk_active_name", "") ?: ""
-        stkCounter = prefs.getString("stk_active_counter", "") ?: ""
-        stkRetain = prefs.getInt("stk_active_retain", 30)
+        enterStocktakeSession(asid,
+            prefs.getString("stk_s_code_$asid", "") ?: "",
+            prefs.getString("stk_s_name_$asid", "") ?: "",
+            prefs.getString("stk_s_counter_$asid", "") ?: "",
+            prefs.getInt("stk_s_retain_$asid", 30), false)
+    }
+
+    // يفتحُ جلسةَ جردٍ (من QR أو القائمةِ أو الاستئناف): يحفظُها ويعرضُ شاشتَها.
+    private fun enterStocktakeSession(sid: String, code: String, name: String, counter: String, retain: Int, sound: Boolean) {
+        stkSessionId = sid; stkCode = code; stkName = name; stkCounter = counter; stkRetain = retain
         stkActive = true
-        loadStkLines(asid)               // يستعيدُ المسحاتِ والفهرسَ المخزّنَ (أسماءٌ تعملُ دونَ اتصال)
+        prefs.edit()
+            .putString("stk_active_sid", sid)   // للاستئنافِ التلقائيّ بعدَ الإغلاق (يُمسَحُ عند «خروج»)
+            .putString("stk_last_sid", sid)     // لزرِّ «الجرد» في القائمةِ (يبقى بعدَ الخروج)
+            .putString("stk_s_code_$sid", code)
+            .putString("stk_s_name_$sid", name)
+            .putString("stk_s_counter_$sid", counter)
+            .putInt("stk_s_retain_$sid", retain)
+            .apply()
+        loadStkLines(sid)
+        if (sound) runOnUiThread { playToneSuccess(); vibrateSuccess() }
         window.decorView.post { showStocktakeUI(); renderStkList() }
-        downloadCatalog()                // تحديثُ الأسماءِ إن كانتْ هناك شبكةٌ (يُتجاهَلُ بأمانٍ دونَ اتصال)
+        downloadCatalog()
+    }
+
+    // يستأنفُ آخرَ جلسةٍ من زرِّ القائمة (بعدَ الخروج) — بلا إعادةِ مسحِ QR.
+    private fun resumeLastStocktake() {
+        if (stkActive) return
+        val lsid = prefs.getString("stk_last_sid", "") ?: ""
+        if (lsid.isBlank()) {
+            Toast.makeText(this, L("لا توجد جلسة جرد سابقة — امسح رمز جلسة من الكمبيوتر.", "No previous stocktake — scan a session QR."), Toast.LENGTH_LONG).show()
+            return
+        }
+        enterStocktakeSession(lsid,
+            prefs.getString("stk_s_code_$lsid", "") ?: "",
+            prefs.getString("stk_s_name_$lsid", "") ?: "",
+            prefs.getString("stk_s_counter_$lsid", "") ?: "",
+            prefs.getInt("stk_s_retain_$lsid", 30), true)
     }
 
     // بعد منحِ إذنِ الكاميرا أوّلَ مرّة: شغّلِ الكاميرا فوراً (بلا حاجةٍ لإغلاقِ التطبيقِ وفتحِه)
@@ -579,6 +608,7 @@ class MainActivity : AppCompatActivity() {
     // ★ القائمة (☰): قائمةٌ نظيفةٌ موحّدةُ الاتجاهِ مثلَ تطبيقاتِ الجوال — تشملُ لغةَ الصوتِ ولغةَ البرنامج.
     private fun showMainMenu(anchor: View) {
         val items = arrayOf(
+            L("🧮 جلسة الجرد", "🧮 Stocktake session"),
             L("💡 الكشّاف", "💡 Torch"),
             L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael"),
             L("🌐 اللغة والصوت", "🌐 Language & voice"),
@@ -592,14 +622,15 @@ class MainActivity : AppCompatActivity() {
             .setTitle(L("القائمة", "Menu"))
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> toggleTorch()
-                    1 -> openLinkPanel()
-                    2 -> openLangPanel()
-                    3 -> chooseSpeakMode()
-                    4 -> openFontDialog()
-                    5 -> refreshStatus()
-                    6 -> confirmResetCounter()
-                    7 -> showAbout()
+                    0 -> resumeLastStocktake()
+                    1 -> toggleTorch()
+                    2 -> openLinkPanel()
+                    3 -> openLangPanel()
+                    4 -> chooseSpeakMode()
+                    5 -> openFontDialog()
+                    6 -> refreshStatus()
+                    7 -> confirmResetCounter()
+                    8 -> showAbout()
                 }
             }
             .show()
@@ -1247,23 +1278,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
                 edtServerIp.setText(ip); edtServerPort.setText(port)
             }
-            stkSessionId = sid; stkCode = ccode; stkName = name; stkCounter = counter; stkRetain = retain
-            stkActive = true
-            // 🧮 نحفظُ الجلسةَ النشطةَ محلياً لتُستأنَفَ تلقائيّاً بعدَ إغلاقِ التطبيقِ أو انقطاعِ الشبكة
-            prefs.edit()
-                .putString("stk_active_sid", sid)
-                .putString("stk_active_code", ccode)
-                .putString("stk_active_name", name)
-                .putString("stk_active_counter", counter)
-                .putInt("stk_active_retain", retain)
-                .apply()
-            loadStkLines(sid)          // استرجاعُ ما حُفظ محلياً لهذه الجلسة (إن وُجد)
-            runOnUiThread {
-                playToneSuccess(); vibrateSuccess()
-                showStocktakeUI()
-                renderStkList()
-            }
-            downloadCatalog()          // أسماءُ الأصنافِ للعملِ دونَ اتصالٍ لاحقاً (يعملُ إن كنّا على الشبكةِ الآن)
+            enterStocktakeSession(sid, ccode, name, counter, retain, true)
         } catch (e: Exception) {
             runOnUiThread { playToneError(); vibrateError()
                 showTopResult(L("🔴 تعذّر قراءة رمز الجرد", "🔴 Could not read stocktake code"), "#B91C1C") }
@@ -1689,23 +1704,11 @@ class MainActivity : AppCompatActivity() {
         stkActive = false
         stkOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
         stkOverlay = null; stkListLayout = null; stkPendingText = null; stkTitleText = null
-        // امسحِ علامةَ الجلسةِ النشطةِ فلا تُستأنَفُ بعدَ الخروجِ الصريح (البياناتُ تبقى محفوظةً في stk_lines_)
-        prefs.edit().remove("stk_active_sid").remove("stk_active_code")
-            .remove("stk_active_name").remove("stk_active_counter").remove("stk_active_retain").apply()
-        try { findViewById<View>(R.id.scanBox)?.visibility = View.VISIBLE } catch (e: Exception) {}
-        bottomBar.visibility = View.VISIBLE
-        btnSite?.visibility = View.VISIBLE
-        btnSettings.visibility = View.VISIBLE
-        btnTorch.visibility = View.VISIBLE
-        try { findViewById<View>(R.id.btnRefresh).visibility = View.VISIBLE } catch (e: Exception) {}
-        try { findViewById<View>(R.id.btnMenu).visibility = View.VISIBLE } catch (e: Exception) {}
-        previewView.bringToFront()
-        try { findViewById<View>(R.id.scanBox)?.bringToFront() } catch (e: Exception) {}
-        bottomBar.bringToFront()
-        btnSite?.bringToFront(); btnSettings.bringToFront(); btnTorch.bringToFront()
-        try { findViewById<View>(R.id.btnRefresh).bringToFront() } catch (e: Exception) {}
-        try { findViewById<View>(R.id.btnMenu).bringToFront() } catch (e: Exception) {}
-        Toast.makeText(this, L("خرجتَ من وضعِ الجرد — بياناتُك محفوظةٌ في الجوّال", "Left stocktake — your data is saved on the phone"), Toast.LENGTH_LONG).show()
+        // امسحْ علامةَ الاستئنافِ التلقائيِّ فقط (نُبقي stk_last_sid ليعودَ من زرِّ القائمة).
+        prefs.edit().remove("stk_active_sid").apply()
+        Toast.makeText(this, L("خرجتَ من وضعِ الجرد — بياناتُك محفوظة. للعودة: القائمة ← جلسة الجرد", "Left stocktake — data saved. To return: Menu → Stocktake"), Toast.LENGTH_LONG).show()
+        // إعادةُ بناءِ الشاشةِ نظيفةً (تُعيدُ تصميمَ الماسحِ الأصليَّ تماماً بلا أزرارٍ قديمةٍ عالقة)
+        window.decorView.post { recreate() }
     }
 
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
