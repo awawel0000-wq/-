@@ -21,11 +21,11 @@ jobs:
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.7'   # ثابتٌ ومتوافقٌ مع AGP 8.2.2 — لا نترك CI يركّب Gradle 9 الكاسِر
 
-    - name: Build APK with Gradle
-      run: gradle assembleDebug
+    - name: Build APK with Gradle Wrapper (Gradle 8.7 مثبّت داخل المشروع)
+      run: |
+        chmod +x ./gradlew
+        ./gradlew assembleDebug --no-daemon --stacktrace
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4

@@ -759,6 +759,8 @@ class MainActivity : AppCompatActivity() {
         heartbeatHandler.post(object : Runnable {
             override fun run() {
                 checkServerStatus()
+                // 🧮 مزامنةٌ تلقائيّةٌ للجرد كلَّ نبضةٍ إن كان هناك معلّق (تعملُ فورَ عودةِ الشبكة)
+                if (stkActive) trySyncStocktake(false)
                 heartbeatHandler.postDelayed(this, 4000)
             }
         })
@@ -1239,7 +1241,10 @@ class MainActivity : AppCompatActivity() {
 
     /** يُنزّلُ فهرسَ الأصنافِ (باركود → اسم/معرّف) مرّةً ويخزّنُه محلياً — ليعملَ الاسمُ دونَ اتصال. */
     private fun downloadCatalog() {
-        val url = "${getServerUrl()}/api/products?limit=5000"
+        // فهرسُ الأصنافِ عبرَ نقطةِ الجردِ المُصادَقةِ برمزِ الجلسة (لا تحتاجُ دخولاً)
+        val url = "${getServerUrl()}/api/stocktake/catalog?session=" +
+            java.net.URLEncoder.encode(stkSessionId, "UTF-8") + "&code=" +
+            java.net.URLEncoder.encode(stkCode, "UTF-8")
         val req = Request.Builder().url(url).get().build()
         httpClient.newCall(req).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) { /* دونَ اتصال: نُبقي الفهرسَ المخزّنَ سابقاً */ }
@@ -1332,6 +1337,14 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { System.currentTimeMillis().toString() }
     }
 
+    // ارتفاعُ شريطِ حالةِ النظام (لِيَقيَ الهيدرَ من التداخلِ مع أيقوناتِ الجوّال).
+    private fun statusBarH(): Int {
+        return try {
+            val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (id > 0) resources.getDimensionPixelSize(id) else dp(24)
+        } catch (e: Exception) { dp(24) }
+    }
+
     private fun stkKey(): String = "stk_lines_" + stkSessionId
     private fun saveStkLines() {
         try {
@@ -1349,15 +1362,19 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {}
     }
 
-    /** يدفعُ السطورَ غيرَ المُزامَنةِ للخادمِ (idempotent عبرَ uid). صامتٌ عندَ الانقطاع — يُعادُ لاحقاً. */
-    private fun trySyncStocktake() {
+    /** يدفعُ السطورَ غيرَ المُزامَنةِ للخادمِ (idempotent عبرَ uid). manual=true ⇒ رسائلُ نجاحٍ/فشلٍ واضحة. */
+    private fun trySyncStocktake(manual: Boolean = false) {
         if (stkSessionId.isBlank()) return
         val pending = ArrayList<JSONObject>()
         for (l in stkLines) { if (!l.optBoolean("synced", false)) pending.add(l) }
-        if (pending.isEmpty()) { runOnUiThread { updateStkPending() }; return }
+        if (pending.isEmpty()) {
+            runOnUiThread { updateStkPending(); if (manual) Toast.makeText(this, L("لا شيءَ للمزامنة — الكلُّ محفوظٌ في النظام ✅", "Nothing to sync — all saved ✅"), Toast.LENGTH_SHORT).show() }
+            return
+        }
         val payload = JSONObject()
         val sidInt = stkSessionId.toIntOrNull()
         if (sidInt != null) payload.put("session_id", sidInt) else payload.put("session_id", stkSessionId)
+        payload.put("code", stkCode)          // 🔑 مصادقةٌ برمزِ الجلسة (بدلَ الدخول)
         payload.put("device", stkDeviceId)
         payload.put("counter", stkCounter)
         val larr = JSONArray()
@@ -1372,18 +1389,40 @@ class MainActivity : AppCompatActivity() {
             })
         }
         payload.put("lines", larr)
+        val n = pending.size
         val rb = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val req = Request.Builder().url("${getServerUrl()}/api/stocktake/push").post(rb).build()
         httpClient.newCall(req).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) { runOnUiThread { updateStkPending() } }
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    updateStkPending()
+                    if (manual) Toast.makeText(this@MainActivity, L("تعذّرتِ المزامنة — لا اتصالَ بالخادم. ستُعادُ تلقائيّاً عند عودةِ الشبكة.", "Sync failed — no server connection. Will retry automatically."), Toast.LENGTH_LONG).show()
+                }
+            }
             override fun onResponse(call: Call, response: Response) {
-                if (response.isSuccessful) {
+                val ok = response.isSuccessful
+                val bodyStr = try { response.body?.string() ?: "" } catch (e: Exception) { "" }
+                if (ok) {
                     for (l in pending) l.put("synced", true)
                     val it = stkLines.iterator()
                     while (it.hasNext()) { val l = it.next(); if (l.optInt("deleted", 0) == 1 && l.optBoolean("synced", false)) it.remove() }
                     saveStkLines()
                 }
-                runOnUiThread { renderStkList(); updateStkPending() }
+                runOnUiThread {
+                    renderStkList(); updateStkPending()
+                    if (ok) {
+                        if (manual) Toast.makeText(this@MainActivity, L("تمّتِ المزامنة ✅ — أُرسِل $n سطراً للنظام", "Synced ✅ — $n rows sent"), Toast.LENGTH_SHORT).show()
+                    } else {
+                        // 403 = رمزُ جلسةٍ خطأ · 409 = الجلسةُ مقفلة · غيرُها = خطأُ خادم
+                        val msg = when (response.code) {
+                            403 -> L("فشلتِ المزامنة — رمزُ الجلسةِ غيرُ صالح. أعِد مسحَ QR الجلسة.", "Sync failed — invalid session code. Rescan the session QR.")
+                            409 -> L("الجلسةُ مقفلةٌ في النظام — لا تقبلُ مسحاتٍ جديدة.", "Session is closed — no new scans accepted.")
+                            else -> L("تعذّرتِ المزامنة (خطأ ${response.code}). ستُعادُ تلقائيّاً.", "Sync failed (${response.code}). Will retry.")
+                        }
+                        if (manual || response.code == 403 || response.code == 409)
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         })
     }
@@ -1408,7 +1447,8 @@ class MainActivity : AppCompatActivity() {
 
         val header = android.widget.LinearLayout(this)
         header.orientation = android.widget.LinearLayout.HORIZONTAL
-        header.setPadding(dp(14), dp(12), dp(10), dp(10))
+        // حشوٌ علويٌّ بمقدارِ شريطِ الحالةِ حتى لا تتداخلَ أيقوناتُ النظامِ مع الهيدر
+        header.setPadding(dp(14), dp(10) + statusBarH(), dp(10), dp(10))
         header.setBackgroundColor(Color.parseColor("#00695C"))
         header.gravity = android.view.Gravity.CENTER_VERTICAL
         val title = TextView(this)
@@ -1443,7 +1483,7 @@ class MainActivity : AppCompatActivity() {
         sync.text = L("🔄 مزامنة", "🔄 Sync"); sync.setTextColor(Color.WHITE)
         sync.setBackgroundColor(Color.parseColor("#0284C7"))
         sync.layoutParams = android.widget.LinearLayout.LayoutParams(-2, dp(46))
-        sync.setOnClickListener { Toast.makeText(this, L("جارٍ المزامنة…", "Syncing…"), Toast.LENGTH_SHORT).show(); trySyncStocktake() }
+        sync.setOnClickListener { Toast.makeText(this, L("جارٍ المزامنة…", "Syncing…"), Toast.LENGTH_SHORT).show(); trySyncStocktake(true) }
         bar.addView(pend); bar.addView(sync)
         root.addView(bar)
 
@@ -1578,7 +1618,9 @@ class MainActivity : AppCompatActivity() {
         bc.setTextColor(Color.parseColor("#94A3B8")); bc.textSize = 11f
         info.addView(nm); info.addView(bc)
 
-        row.addView(del); row.addView(minus); row.addView(qty); row.addView(plus); row.addView(info)
+        // الترتيب: الاسم/الباركود ثمّ − الكمية + في طرف، وزرُّ الحذفِ في الطرفِ المقابلِ بعيداً عن «−» (تفادي الحذفِ الخطأ)
+        del.layoutParams = android.widget.LinearLayout.LayoutParams(dp(46), dp(46)).apply { setMargins(dp(8), 0, 0, 0) }
+        row.addView(minus); row.addView(qty); row.addView(plus); row.addView(info); row.addView(del)
         return row
     }
 
