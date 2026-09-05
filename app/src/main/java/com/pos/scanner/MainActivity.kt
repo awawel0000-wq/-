@@ -669,11 +669,17 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, L("وجّه الكاميرا نحو رمز الربط", "Aim at the link QR"), Toast.LENGTH_LONG).show()
     }
 
-    // ★ عن التطبيق: الاسمُ والإصدار.
+    // ★ عن التطبيق: الاسمُ والإصدارُ الحقيقيُّ (يُقرأُ من رقمِ البناءِ لا ثابتاً — فلا يخدعُ المستخدم).
     private fun showAbout() {
+        val v = try {
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            (pi.versionName ?: "") + " (" +
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pi.longVersionCode.toString()
+                 else @Suppress("DEPRECATION") pi.versionCode.toString()) + ")"
+        } catch (e: Exception) { "?" }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(L("عن التطبيق", "About"))
-            .setMessage(L("ماسح باركود الأوائل\nالإصدار: 1.0", "Al-Awael Barcode Scanner\nVersion: 1.0"))
+            .setMessage(L("ماسح باركود الأوائل\nالإصدار: $v", "Al-Awael Barcode Scanner\nVersion: $v"))
             .setPositiveButton(L("حسناً", "OK"), null)
             .show()
     }
@@ -1281,8 +1287,13 @@ class MainActivity : AppCompatActivity() {
                         val p = arr.optJSONObject(i) ?: continue
                         val nm = p.optString("name", p.optString("name_ar", ""))
                         val pid = if (p.has("id")) p.optString("id", "") else ""
-                        val bcs = listOf(p.optString("barcode", ""), p.optString("sku", ""), p.optString("code", ""))
-                        for (bc in bcs) { if (bc.isNotBlank()) { stkNameMap[bc] = nm; stkIdMap[bc] = pid } }
+                        // كلُّ مفاتيحِ الصنف: مصفوفةُ barcodes من الخادم + احتياطيّاً barcode/sku/code
+                        val keys = ArrayList<String>()
+                        p.optJSONArray("barcodes")?.let { a -> for (i in 0 until a.length()) { val k = a.optString(i, ""); if (k.isNotBlank()) keys.add(k) } }
+                        for (extra in listOf(p.optString("barcode", ""), p.optString("sku", ""), p.optString("code", ""))) {
+                            if (extra.isNotBlank() && !keys.contains(extra)) keys.add(extra)
+                        }
+                        for (bc in keys) { stkNameMap[bc] = nm; stkIdMap[bc] = pid }
                     }
                     val save = JSONObject()
                     save.put("names", JSONObject(stkNameMap as Map<*, *>))
