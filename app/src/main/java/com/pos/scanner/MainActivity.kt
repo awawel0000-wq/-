@@ -52,8 +52,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtItemDetails: TextView
     private lateinit var txtStatusBadge: TextView
     private lateinit var txtResultTop: TextView       // ★ لوحةُ النتيجةِ فوقَ الإطارِ الأخضر
-    private var switchVoice: Switch? = null           // ★ خيارُ النطقِ الصوتي في الإعدادات
-    private var btnLang: Button? = null                // ★ زرُّ اختيارِ لغةِ الصوت (بالأعلى)
+    private var switchVoice: android.widget.CompoundButton? = null   // ★ تفعيلُ النطقِ (CheckBox)
     private var btnInstallVoice: Button? = null        // ★ زرُّ تحميلِ صوتِ TTS العربي (يظهرُ عند الحاجة)
     private var txtScanCount: TextView? = null         // ★ عدّادُ مسحاتِ الجلسة
     private var scanCount = 0                            // عددُ المسحاتِ الناجحةِ هذه الجلسة
@@ -113,27 +112,20 @@ class MainActivity : AppCompatActivity() {
         val cfg = Configuration(base.resources.configuration)
         cfg.setLocale(loc)
         cfg.setLayoutDirection(loc)
+        // ★ نثبّتُ حجمَ الخطِّ من إعدادِ التطبيقِ (الافتراضي 1.0 قياسي) ونتجاهلُ تكبيرَ النظام
+        cfg.fontScale = base.getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
+            .getFloat("font_scale", 1.0f)
         super.attachBaseContext(base.createConfigurationContext(cfg))
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        try {
-            // STREAM_ALARM: أعلى صوتاً وأوضح — يتجاوز الوضع الصامت غالباً · المستوى 100 = الأقصى
-            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
-        } catch (e: Exception) {
-            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) } catch (_: Exception) {}
-        }
-        // ارفع صوت الإنذار للأقصى برمجياً، فلا يفوت الكاشيرَ صوتُ المسح
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val maxAlarm = am.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            am.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
-        } catch (e: Exception) { e.printStackTrace() }
         prefs = getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
         // معرّفُ الجوّالِ الثابت (يُميّزُ جهازَ كلِّ جاردٍ عندَ التجميع)
         stkDeviceId = prefs.getString("stk_device_id", null)
             ?: java.util.UUID.randomUUID().toString().also { prefs.edit().putString("stk_device_id", it).apply() }
+        // لا نلمسُ صوتَ الجهازِ إطلاقاً — نستعملُ مستوى صوتٍ داخليّاً في التطبيقِ فقط.
+        buildToneGenerator()
         initTts()
         initViews()
         loadSettings()
@@ -193,15 +185,47 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean("voice_feedback", checked).apply()
             if (checked) speak("النطق الصوتي مفعّل", "Voice feedback on")
         }
-        btnLang = findViewById(R.id.btnLang)
         btnInstallVoice = findViewById(R.id.btnInstallVoice)
         btnInstallVoice?.setOnClickListener { openTtsInstall() }
+        // ★ اختيارُ لغةِ الصوت (عربي/إنجليزي) — راديو مستقلٌّ عن لغةِ البرنامج
+        val rgVoice = findViewById<android.widget.RadioGroup>(R.id.rgVoiceLang)
+        rgVoice.check(if ((prefs.getString("voice_lang", "ar") ?: "ar") == "en") R.id.rbVoiceEn else R.id.rbVoiceAr)
+        rgVoice.setOnCheckedChangeListener { _, id ->
+            val sel = if (id == R.id.rbVoiceEn) "en" else "ar"
+            if (sel != (prefs.getString("voice_lang", "ar") ?: "ar")) {
+                prefs.edit().putString("voice_lang", sel).apply()
+                applyLangUi(true)
+                if (sel == "en") speak("English voice", "English voice")
+                else if (ttsArabicOk) speak("الصوت العربي", "Arabic voice")
+            }
+        }
+        // ★ اختيارُ لغةِ البرنامج (عربي/إنجليزي) — يعيدُ بناءَ الشاشةِ بالاتجاهِ الصحيح
+        val rgUi = findViewById<android.widget.RadioGroup>(R.id.rgUiLang)
+        rgUi.check(if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") R.id.rbUiEn else R.id.rbUiAr)
+        rgUi.setOnCheckedChangeListener { _, id ->
+            val sel = if (id == R.id.rbUiEn) "en" else "ar"
+            if (sel != (prefs.getString("ui_lang", "ar") ?: "ar")) {
+                prefs.edit().putString("ui_lang", sel).apply()
+                recreate()
+            }
+        }
+        // ★ مستوى صوتِ التنبيه (داخليّ) — زرّا − و + يغيّران النسبةَ ويشغّلان نغمةَ تجربة.
+        val txtVolVal = findViewById<TextView>(R.id.txtVolVal)
+        fun showVol() { txtVolVal.text = (soundVol() * 100).toInt().toString() + "%" }
+        showVol()
+        findViewById<Button>(R.id.btnVolMinus).setOnClickListener {
+            val p = ((soundVol() * 100).toInt() - 10).coerceAtLeast(5)
+            prefs.edit().putFloat("sound_vol", p / 100f).apply(); showVol(); buildToneGenerator(); playToneSuccess()
+        }
+        findViewById<Button>(R.id.btnVolPlus).setOnClickListener {
+            val p = ((soundVol() * 100).toInt() + 10).coerceAtMost(100)
+            prefs.edit().putFloat("sound_vol", p / 100f).apply(); showVol(); buildToneGenerator(); playToneSuccess()
+        }
         txtScanCount = findViewById(R.id.txtScanCount)
         txtScanCount?.background = roundBg("#CC0F172A", 20f)
         // لمسةٌ على العدّادِ تصفّرُه (بتأكيد).
         txtScanCount?.setOnClickListener { confirmResetCounter() }
         applyLangUi(false)
-        btnLang?.setOnClickListener { toggleVoiceLang() }
         styleTopButtons()
         btnTorch.setOnClickListener { toggleTorch() }
         btnSettings.setOnClickListener {
@@ -330,9 +354,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.headerStack).visibility = View.GONE
         bottomBar.visibility = View.GONE
         btnSite?.visibility = View.GONE
-        btnSettings.visibility = View.GONE
-        btnTorch.visibility = View.GONE
-        findViewById<View>(R.id.btnRefresh).visibility = View.GONE
+        findViewById<View>(R.id.btnMenu).visibility = View.GONE   // ★ يختفي زرُّ القائمةِ داخلَ الموقع
     }
 
     /** يعود من الموقع إلى شاشة الماسح. */
@@ -340,22 +362,18 @@ class MainActivity : AppCompatActivity() {
         val w = web ?: return
         if (scanForSite) stopSiteScan()   // احتياطاً: أوقفْ وضعَ مسح الموقع إن كان مفعّلاً
         w.visibility = View.GONE
-        // عُدنا للماسح: أرجِع عناصرَه
+        // عُدنا للماسح: أرجِع عناصرَه (فقط الجديدةَ — لا الأيقوناتِ القديمةَ المُستبدَلةَ بالقائمة)
         findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
         bottomBar.visibility = View.VISIBLE
         btnSite?.visibility = View.VISIBLE
-        btnSettings.visibility = View.VISIBLE
-        btnTorch.visibility = View.VISIBLE
-        findViewById<View>(R.id.btnRefresh).visibility = View.VISIBLE
-        // إصلاحُ الطبقات: الـ web كان مرفوعاً foreground فوق المستطيلِ والشريطِ السفلي.
-        // نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
+        findViewById<View>(R.id.btnMenu).visibility = View.VISIBLE   // ★ يرجعُ زرُّ القائمة
+        // إصلاحُ الطبقات: نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
         previewView.bringToFront()                       // الكاميرا خلفية
         (findViewById<View>(R.id.scanBox))?.bringToFront() // المستطيلُ الأخضرُ الثابت
         findViewById<View>(R.id.headerStack).bringToFront() // العمودُ العلوي
         bottomBar.bringToFront()                          // شريطُ البياناتِ السفلي
-        btnSite?.bringToFront(); btnSettings.bringToFront(); btnTorch.bringToFront()
-        findViewById<View>(R.id.btnRefresh).bringToFront()
-        layoutPendingQueue.bringToFront()
+        btnSite?.bringToFront()
+        findViewById<View>(R.id.btnMenu).bringToFront()
         val root = w.parent as? android.view.ViewGroup
         root?.requestLayout(); root?.invalidate()          // إجبارُ إعادةِ الرسمِ فوراً
     }
@@ -364,6 +382,20 @@ class MainActivity : AppCompatActivity() {
         edtServerIp.setText(prefs.getString("server_ip", "192.168.1.100"))
         edtServerPort.setText(prefs.getString("server_port", "5005"))
         voiceOn = prefs.getBoolean("voice_feedback", false)
+    }
+
+    // ★ مستوى الصوتِ الداخليُّ (0..1) — يتحكّمُ به المستخدمُ من الإعدادات بلا مساسٍ بصوتِ الجهاز.
+    private fun soundVol(): Float = (prefs.getFloat("sound_vol", 1.0f)).coerceIn(0.05f, 1.0f)
+
+    // ★ يبني مولّدَ النغماتِ بمستوى الصوتِ الحاليِّ (يُعاد بناؤه عند تغييرِ المستوى).
+    private fun buildToneGenerator() {
+        try { toneGenerator?.release() } catch (e: Exception) {}
+        val vol = (soundVol() * 100).toInt().coerceIn(1, 100)
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, vol)
+        } catch (e: Exception) {
+            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, vol) } catch (_: Exception) {}
+        }
     }
 
     // ★ محرّكُ النطق (TTS): نُفضّلُ محرّكَ Google إن وُجد؛ فإن فشلَتْ تهيئتُه نرجعُ للمحرّكِ الافتراضيِّ تلقائياً
@@ -431,41 +463,37 @@ class MainActivity : AppCompatActivity() {
         btnTorch.background = roundBg(glass, 24f)
         findViewById<View>(R.id.btnRefresh).background = roundBg(glass, 24f)
         btnSite?.background = roundBg("#E01C6FBF", 16f)
-        btnLang?.background = roundBg("#E00F766E", 16f)
         btnInstallVoice?.background = roundBg("#E0B45309", 16f)
     }
 
-    // ★ يُحدّثُ نصَّ زرِّ لغةِ الصوتِ حسبَ الاختيارِ المحفوظ.
-    private fun updateLangButton() {
-        val lang = prefs.getString("voice_lang", "ar") ?: "ar"
-        btnLang?.text = if (lang == "en") "🌐 Voice: EN" else "🌐 صوت: عربي"
-    }
-
-    // ★ يضبطُ واجهةَ اللغة: نصَّ الزرِّ + إظهارَ/إخفاءَ زرِّ التحميلِ + رسالةَ «لا يدعم» عند الحاجة.
-    //   announce=true ⇒ يُظهرُ الرسالةَ بصوتٍ عالٍ (عند ضغطِ المستخدمِ على العربيِّ غيرِ المدعوم).
+    // ★ يضبطُ واجهةَ الصوت: إظهارَ/إخفاءَ زرِّ التحميلِ + رسالةَ «لا يدعم» عند الحاجة.
+    //   announce=true ⇒ يُظهرُ الرسالةَ (عند اختيارِ المستخدمِ العربيَّ غيرَ المدعوم).
     private fun applyLangUi(announce: Boolean) {
-        updateLangButton()
         val lang = prefs.getString("voice_lang", "ar") ?: "ar"
+        // زرُّ إدارةِ الأصواتِ ظاهرٌ دائماً — لإضافةِ/تغييرِ/تحميلِ أيِّ صوتٍ وقتما شاء المستخدم.
+        btnInstallVoice?.visibility = View.VISIBLE
         val arabicUnavailable = (lang == "ar" && ttsReady && !ttsArabicOk)
-        btnInstallVoice?.visibility = if (arabicUnavailable) View.VISIBLE else View.GONE
         if (arabicUnavailable && announce) {
             val msg = if (ttsArabicMissingData)
-                "⬇ الصوت العربي يحتاج تنزيلاً — اضغط «تحميل صوت عربي»"
+                "⬇ الصوت العربي يحتاج تنزيلاً — افتح «تحميل / تغيير أصوات الجهاز»"
             else
-                "⚠️ محرّك النطق الحالي لا يدعم العربي — اضغط «تحميل صوت عربي» أو استخدم Google TTS"
+                "⚠️ محرّك النطق الحالي لا يدعم العربي — افتح «تحميل / تغيير أصوات الجهاز» أو ثبّت Google TTS"
             showTopResult(msg, "#B45309")
         }
     }
 
-    // ★ يفتحُ شاشةَ تثبيتِ أصواتِ TTS في أندرويد (حلٌّ بضغطة). إن تعذّر ⇒ إعداداتُ النطق.
+    // ★ يفتحُ شاشةَ أصواتِ الجهازِ (تحويلُ النصِّ إلى كلام): منها يُضيفُ لغةَ صوتٍ أو يغيّرُ المحرّكَ أو
+    //   يعدّلُ السرعة. إن تعذّرتْ نجرّبُ شاشةَ تثبيتِ بياناتِ الصوت، ثمّ نرشدُ يدويّاً.
     private fun openTtsInstall() {
         try {
-            startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
+            val i = Intent("com.android.settings.TTS_SETTINGS")
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
         } catch (e: Exception) {
             try {
-                startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
             } catch (e2: Exception) {
-                Toast.makeText(this, "افتح إعدادات الجهاز ← اللغة ← تحويل النص إلى كلام", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "افتح إعدادات الجهاز ← الإدارة العامة/اللغة ← تحويل النص إلى كلام", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -502,12 +530,6 @@ class MainActivity : AppCompatActivity() {
     private fun L(ar: String, en: String): String =
         if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") en else ar
 
-    // ★ يبدّلُ لغةَ واجهةِ البرنامج، ثمّ يُعيدُ بناءَ الشاشةِ ليطبّقَ الاتجاهَ (RTL/LTR) على كلِّ شيء.
-    private fun toggleUiLang() {
-        val cur = prefs.getString("ui_lang", "ar") ?: "ar"
-        prefs.edit().putString("ui_lang", if (cur == "ar") "en" else "ar").apply()
-        recreate()
-    }
 
     // ★ يطبّقُ لغةَ الواجهةِ على كلِّ النصوصِ الثابتةِ + اتجاهِ التخطيط (RTL عربي / LTR إنجليزي).
     private fun applyLanguage() {
@@ -521,9 +543,10 @@ class MainActivity : AppCompatActivity() {
         edtServerPort.hint = L("البورت (افتراضي: 5005)", "Port (default: 5005)")
         findViewById<Button>(R.id.btnTestConnection).text = L("فحص الاتصال", "Test connection")
         btnSaveSettings.text = L("حفظ الإعدادات", "Save settings")
-        findViewById<TextView>(R.id.lblVoiceSection).text = L("التنبيه الصوتي", "Voice feedback")
-        switchVoice?.text = L("🔊 نُطقٌ صوتيّ بالنتيجة (بدل الرنّة)", "🔊 Speak result (instead of beep)")
+        findViewById<TextView>(R.id.lblVoiceSection).text = L("الصوت", "Voice")
+        switchVoice?.text = L("🔊 تفعيل النطق الصوتي بالنتيجة", "🔊 Enable spoken result")
         findViewById<TextView>(R.id.lblVoiceLang).text = L("لغة الصوت:", "Voice language:")
+        findViewById<TextView>(R.id.lblUiLang).text = L("لغة البرنامج:", "App language:")
         findViewById<TextView>(R.id.txtVoiceHint).text = L(
             "عند النجاح يقول اسم الصنف، وعند الفشل «لم يصل إلى النظام».",
             "On success it says the item name; on failure «Not sent to system».")
@@ -531,21 +554,18 @@ class MainActivity : AppCompatActivity() {
             "أو غيّر الجهاز بمسح رمز الربط (QR) من الكمبيوتر",
             "Or switch device by scanning the link QR from the computer")
         findViewById<Button>(R.id.btnScanLink).text = L("📷 مسح رمز الربط بالكاميرا", "📷 Scan link QR")
-        updateLangButton()
+        btnInstallVoice?.text = L("🗣 تحميل / تغيير أصوات الجهاز", "🗣 Install / change device voices")
+        findViewById<TextView>(R.id.lblSoundVol).text = L("مستوى صوت التنبيه:", "Alert volume:")
         txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount
     }
 
     // ★ القائمة (☰): قائمةٌ نظيفةٌ موحّدةُ الاتجاهِ مثلَ تطبيقاتِ الجوال — تشملُ لغةَ الصوتِ ولغةَ البرنامج.
     private fun showMainMenu(anchor: View) {
-        val vl = if ((prefs.getString("voice_lang", "ar") ?: "ar") == "en") "English" else "عربي"
-        val ul = if ((prefs.getString("ui_lang", "ar") ?: "ar") == "en") "English" else "عربي"
         val items = arrayOf(
             L("💡 الكشّاف", "💡 Torch"),
-            L("📷 إعادة الربط (QR)", "📷 Re-link (QR)"),
-            L("🔌 إعدادات الاتصال", "🔌 Connection settings"),
-            L("🌐 لغة البرنامج ($ul)", "🌐 App language ($ul)"),
-            L("🔊 لغة الصوت ($vl)", "🔊 Voice language ($vl)"),
-            L("⬇ تحميل صوت TTS (إن لم يوجد)", "⬇ Install TTS voice (if missing)"),
+            L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael"),
+            L("🌐 اللغة والصوت", "🌐 Language & voice"),
+            L("🔠 حجم الخط", "🔠 Font size"),
             L("🔄 تحديث الحالة", "🔄 Refresh status"),
             L("🔢 تصفير العدّاد", "🔢 Reset counter"),
             L("ℹ️ عن التطبيق", "ℹ️ About")
@@ -555,33 +575,61 @@ class MainActivity : AppCompatActivity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> toggleTorch()
-                    1 -> startRelink()
-                    2 -> openSettings()
-                    3 -> toggleUiLang()
-                    4 -> toggleVoiceLang()
-                    5 -> openTtsInstall()
-                    6 -> refreshStatus()
-                    7 -> confirmResetCounter()
-                    8 -> showAbout()
+                    1 -> openLinkPanel()
+                    2 -> openLangPanel()
+                    3 -> openFontDialog()
+                    4 -> refreshStatus()
+                    5 -> confirmResetCounter()
+                    6 -> showAbout()
                 }
             }
             .show()
     }
 
-    // ★ تبديلُ لغةِ الصوتِ (عربي/إنجليزي) — من القائمةِ أو من زرِّ الإعدادات.
-    private fun toggleVoiceLang() {
-        val cur = prefs.getString("voice_lang", "ar") ?: "ar"
-        val next = if (cur == "ar") "en" else "ar"
-        prefs.edit().putString("voice_lang", next).apply()
-        applyLangUi(true)
-        if (next == "en") speak("English voice", "English voice")
-        else if (ttsArabicOk) speak("الصوت العربي", "Arabic voice")
+    // ★ يفتحُ الإعداداتِ على قسمٍ واحدٍ فقط (الربط أو اللغة) — شاشةٌ منبثقةٌ نظيفةٌ لكلِّ غرض.
+    private fun openLinkPanel() { showSettingsSection(true) }
+    private fun openLangPanel() { showSettingsSection(false) }
+    private fun showSettingsSection(conn: Boolean) {
+        findViewById<View>(R.id.secConn).visibility = if (conn) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.secLang).visibility = if (conn) View.GONE else View.VISIBLE
+        findViewById<TextView>(R.id.lblSettingsTitle).text =
+            if (conn) L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael")
+            else L("🌐 اللغة والصوت", "🌐 Language & voice")
+        openSettings()
+    }
+
+    // ★ حجمُ الخط: زرّا − و + يغيّران النسبةَ المئويّة، ثمّ تطبيقٌ يُعيدُ البناء.
+    private fun openFontDialog() {
+        var pct = (prefs.getFloat("font_scale", 1.0f) * 100).toInt()
+        val d = resources.displayMetrics.density
+        fun px(v: Int) = (v * d).toInt()
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = android.view.Gravity.CENTER
+        row.setPadding(px(20), px(20), px(20), px(20))
+        val minus = Button(this); minus.text = "−"; minus.textSize = 22f
+        val lbl = TextView(this); lbl.text = "$pct%"; lbl.textSize = 22f
+        lbl.setPadding(px(24), 0, px(24), 0); lbl.gravity = android.view.Gravity.CENTER
+        val plus = Button(this); plus.text = "+"; plus.textSize = 22f
+        minus.setOnClickListener { pct = (pct - 10).coerceAtLeast(50); lbl.text = "$pct%" }
+        plus.setOnClickListener { pct = (pct + 10).coerceAtMost(200); lbl.text = "$pct%" }
+        row.addView(minus); row.addView(lbl); row.addView(plus)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(L("حجم الخط", "Font size"))
+            .setView(row)
+            .setPositiveButton(L("تطبيق", "Apply")) { _, _ ->
+                prefs.edit().putFloat("font_scale", pct / 100f).apply()
+                recreate()
+            }
+            .setNegativeButton(L("إلغاء", "Cancel"), null)
+            .show()
     }
 
     // ★ فتحُ/إغلاقُ الإعدادات: نخفي عمودَ الماسحِ والشريطَ السفليَّ حتى لا يطفوا فوقَ الإعدادات (elevation).
     private fun openSettings() {
         findViewById<View>(R.id.headerStack).visibility = View.GONE
         bottomBar.visibility = View.GONE
+        findViewById<View>(R.id.btnMenu).visibility = View.GONE
         layoutSettings.visibility = View.VISIBLE
         layoutSettings.bringToFront()
         txtTestResult.visibility = View.GONE
@@ -590,6 +638,7 @@ class MainActivity : AppCompatActivity() {
         layoutSettings.visibility = View.GONE
         findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
         bottomBar.visibility = View.VISIBLE
+        findViewById<View>(R.id.btnMenu).visibility = View.VISIBLE
     }
 
     // ★ إعادةُ الربطِ بمسحِ QR (نفسُ زرِّ "مسح رمز الربط" داخلَ الإعدادات).
@@ -603,10 +652,9 @@ class MainActivity : AppCompatActivity() {
 
     // ★ عن التطبيق: الاسمُ والإصدار.
     private fun showAbout() {
-        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "" }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(L("عن التطبيق", "About"))
-            .setMessage(L("ماسح باركود الأوائل\nالإصدار: ", "Al-Awael Barcode Scanner\nVersion: ") + v)
+            .setMessage(L("ماسح باركود الأوائل\nالإصدار: 1.0", "Al-Awael Barcode Scanner\nVersion: 1.0"))
             .setPositiveButton(L("حسناً", "OK"), null)
             .show()
     }
@@ -626,7 +674,7 @@ class MainActivity : AppCompatActivity() {
             // نُوجّهُ النطقَ لقناةِ الإنذارِ (المرفوعةِ للأقصى مثلَ الرنّة) فلا يضيعُ الصوتُ لو كانتْ قناةُ الوسائطِ منخفضة
             val params = Bundle()
             params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
-            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, soundVol())
             tts?.speak(say, TextToSpeech.QUEUE_FLUSH, params, "scan_" + System.currentTimeMillis())
         } catch (e: Exception) {}
     }
@@ -796,8 +844,8 @@ class MainActivity : AppCompatActivity() {
                                 val barcode = barcodes[0]
                                 val code = barcode.rawValue ?: return@addOnSuccessListener
                                 val isDifferentCode = (code != lastScannedCode)
-                                val hasLeftAndReturned = (isFrameClear && (now - lastScanTime > 1200))
-                                val isCooldownPassed = (now - lastScanTime > 3500)
+                                val hasLeftAndReturned = (isFrameClear && (now - lastScanTime > 600))
+                                val isCooldownPassed = (now - lastScanTime > 1500)
                                 if (isDifferentCode || hasLeftAndReturned || isCooldownPassed) {
                                     lastScannedCode = code
                                     lastScanTime = now
@@ -1214,8 +1262,7 @@ class MainActivity : AppCompatActivity() {
         trySyncStocktake()   // مزامنةٌ صامتةٌ إن كنّا متصلين
     }
 
-    /** 🔊 ينطقُ الكلمةَ الأولى من اسمِ الصنفِ فقط (سرعةٌ بلا تداخل — المتّفقُ عليه).
-     *  يستعملُ محرّكَ النطقِ نفسَه؛ الاسمُ عربيٌّ فيُنطَقُ بالصيغةِ العربيّةِ إن دُعِمت. */
+    /** 🔊 ينطقُ الكلمةَ الأولى من اسمِ الصنفِ فقط (سرعةٌ بلا تداخل — المتّفقُ عليه). */
     private fun speakFirstWordStk(name: String) {
         if (!ttsReady) { playToneSuccess(); return }
         val first = name.trim().split(Regex("\\s+")).firstOrNull { it.isNotBlank() }
