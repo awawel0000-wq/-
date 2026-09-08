@@ -460,18 +460,41 @@ class MainActivity : AppCompatActivity() {
      */
     private fun printDocument(html: String, name: String) {
         try {
-            val w = android.webkit.WebView(this)
+            // 🔧 v1.9 — «Can print only from an activity».
+            //
+            //   رسالةُ أندرويد الحرفيّة، وسببُها دقيق: `PrintManager` يرفضُ العملَ
+            //   إن لم يكن سياقُه **نشاطاً** (Activity). وطلبُ الخدمةِ من داخلِ كائنٍ
+            //   مجهولٍ (object : WebViewClient) كان يُمرّرُ سياقاً ملفوفاً لا النشاطَ
+            //   نفسَه على بعضِ الأجهزة — فيفشلُ الطبعُ بهذه الرسالةِ بالضبط.
+            //   العلاجُ صريح: `this@MainActivity` لا غير.
+            //
+            //   وأضفتُ إلحاقَ الإطارِ بشجرةِ الشاشةِ بمقاسِ ١×١ شفّاف: بعضُ الأجهزة
+            //   (سامسونج منها) لا تُتمّ الطبعَ من إطارٍ غيرِ مُلحَقٍ بنافذة.
+            //   يُنزَعُ بعدَ تسليمِ المستندِ للنظام فلا يبقى أثر.
+            val act = this@MainActivity
+            val w = android.webkit.WebView(act)
             w.settings.javaScriptEnabled = false
+            w.alpha = 0f
+            val root = act.window.decorView as android.view.ViewGroup
+            root.addView(w, android.view.ViewGroup.LayoutParams(1, 1))
+
+            fun cleanup() {
+                try { root.removeView(w) } catch (e: Exception) {}
+                printWeb = null
+            }
+
             w.webViewClient = object : android.webkit.WebViewClient() {
                 override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
                     try {
-                        val pm = getSystemService(Context.PRINT_SERVICE) as android.print.PrintManager
+                        val pm = act.getSystemService(Context.PRINT_SERVICE)
+                                    as android.print.PrintManager
                         val adapter = (view ?: return).createPrintDocumentAdapter(name)
                         pm.print(name, adapter, android.print.PrintAttributes.Builder().build())
+                        // لا نحذفُ الإطارَ فوراً: النظامُ يقرأُ منه أثناءَ المعاينة.
+                        w.postDelayed({ cleanup() }, 60000)
                     } catch (e: Exception) {
                         toastMsg(L("تعذّرت الطباعة: ", "Print failed: ") + (e.message ?: ""))
-                    } finally {
-                        printWeb = null      // أفرِجْ عنه بعدَ تسليمِه للنظام
+                        cleanup()
                     }
                 }
             }
