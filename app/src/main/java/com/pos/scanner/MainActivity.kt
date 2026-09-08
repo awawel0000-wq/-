@@ -485,15 +485,40 @@ class MainActivity : AppCompatActivity() {
 
             w.webViewClient = object : android.webkit.WebViewClient() {
                 override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                    try {
-                        val pm = act.getSystemService(Context.PRINT_SERVICE)
-                                    as android.print.PrintManager
-                        val adapter = (view ?: return).createPrintDocumentAdapter(name)
-                        pm.print(name, adapter, android.print.PrintAttributes.Builder().build())
+                    val adapter = (view ?: return).createPrintDocumentAdapter(name)
+                    val attrs = android.print.PrintAttributes.Builder().build()
+
+                    // 🔁 v1.10 — سياقان لا واحد.
+                    //   «Can print only from an activity» تعني أنّ الخدمةَ بُنيت
+                    //   بسياقٍ ليس نشاطاً. النشاطُ عندنا هو `act`، لكنّ بعضَ
+                    //   الأجهزةِ تُرجعُ خدمةً مبنيّةً بسياقٍ ملفوف. فنُجرّبُ
+                    //   سياقَ الإطارِ نفسِه بديلاً قبلَ أن نعلنَ الفشل.
+                    val contexts = ArrayList<android.content.Context>()
+                    contexts.add(act)
+                    (view.context as? android.app.Activity)?.let { if (it !== act) contexts.add(it) }
+                    var done = false
+                    var lastErr: String? = null
+                    for (ctx in contexts) {
+                        try {
+                            val pm = ctx.getSystemService(Context.PRINT_SERVICE)
+                                        as android.print.PrintManager
+                            pm.print(name, adapter, attrs)
+                            done = true
+                            break
+                        } catch (e: Exception) {
+                            lastErr = e.message
+                        }
+                    }
+                    if (done) {
                         // لا نحذفُ الإطارَ فوراً: النظامُ يقرأُ منه أثناءَ المعاينة.
                         w.postDelayed({ cleanup() }, 60000)
-                    } catch (e: Exception) {
-                        toastMsg(L("تعذّرت الطباعة: ", "Print failed: ") + (e.message ?: ""))
+                    } else {
+                        // 🏷️ الرسالةُ تحملُ رقمَ النسخة: أيُّ لقطةِ شاشةٍ تُعرّفُ نفسَها،
+                        //   فلا نضيعُ في «هل بنى النسخةَ الجديدةَ أم القديمة؟».
+                        val v = try {
+                            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+                        } catch (e: Exception) { "?" }
+                        toastMsg(L("تعذّرت الطباعة [v", "Print failed [v") + v + "]: " + (lastErr ?: ""))
                         cleanup()
                     }
                 }
