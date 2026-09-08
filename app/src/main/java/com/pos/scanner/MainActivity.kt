@@ -340,6 +340,21 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { printDocument(html, if (name.isBlank()) "مستند" else name) }
             }
 
+            /**
+             * 🖨️ v1.11 — الطباعةُ بطريقِ الـPDF، لا بـPrintManager.
+             *
+             * جرّبنا خدمةَ الطباعةِ مرّتين فرفضَها الجهازُ برسالةِ
+             * «Can print only from an activity» مهما صحّحنا السياق. فتوقّفنا عن
+             * مصارعةِ واجهةٍ لا تنصاع، وسلكنا طريقاً **مضموناً ومُجرَّباً عندنا**:
+             * الخادمُ يُنتجُ الـPDF (نفسُه الذي يخرجُ على الحاسوبِ حرفيّاً)، ونحن
+             * نفتحُه بعارضِ الجهاز — ومن العارضِ زرُّ الطباعةِ والمشاركةِ والحفظ.
+             * أقصرُ طريقٍ للنتيجةِ التي يريدُها المستخدم، لا للواجهةِ التي أردناها.
+             */
+            @android.webkit.JavascriptInterface
+            fun openPdf(b64: String, name: String) {
+                runOnUiThread { openPdfFromBase64(b64, name) }
+            }
+
             /** 📤 مشاركةُ نصٍّ (لا ملفّ) — لأزرارِ «مشاركة» النصّيّةِ في صفحةِ الجوّال. */
             @android.webkit.JavascriptInterface
             fun shareText(text: String, title: String) {
@@ -446,6 +461,50 @@ class MainActivity : AppCompatActivity() {
             cb?.onReceiveValue(
                 android.webkit.WebChromeClient.FileChooserParams.parseResult(res.resultCode, res.data))
         }
+
+    /**
+     * 🖨️ v1.11 — يكتبُ الـPDF في ذاكرةِ التطبيقِ ويفتحُه بعارضِ الجهاز.
+     *
+     * نفسُ مزوّدِ الملفّاتِ المستعملِ في المشاركة (وقد ثبتَ عملُه عندك)، فلا بنيةَ
+     * جديدةَ ولا أذوناتٍ إضافيّة. وإن لم يوجدْ عارضُ PDF على الجهازِ فتحنا ورقةَ
+     * المشاركةِ بدلَه — فلا تصلُ إلى طريقٍ مسدود.
+     */
+    private fun openPdfFromBase64(b64: String, name: String) {
+        try {
+            val dir = java.io.File(cacheDir, "share")
+            if (!dir.exists()) dir.mkdirs()
+            val safe = (if (name.isBlank()) "document.pdf" else name)
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                .let { if (it.lowercase().endsWith(".pdf")) it else "$it.pdf" }
+            val f = java.io.File(dir, safe)
+            java.io.FileOutputStream(f).use {
+                it.write(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", f)
+            val view = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/pdf")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                startActivity(view)
+                toastMsg(L("افتحْ قائمةَ العارضِ ثمّ «طباعة»",
+                           "Open the viewer menu then Print"))
+            } catch (e: android.content.ActivityNotFoundException) {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(send, L("فتح بواسطة", "Open with"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } catch (e: Exception) {
+            val v = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" }
+                    catch (x: Exception) { "?" }
+            toastMsg(L("تعذّر فتحُ الملفّ [v", "Open failed [v") + v + "]: " + (e.message ?: ""))
+        }
+    }
 
     /** يبقى حيّاً حتى تنتهي الطباعة: WebView محلّيٌّ يُجمَعُ قبلَ أن يُطبَع. */
     private var printWeb: android.webkit.WebView? = null
