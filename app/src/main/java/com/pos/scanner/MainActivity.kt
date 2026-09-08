@@ -305,6 +305,27 @@ class MainActivity : AppCompatActivity() {
             // يناديه الموقعُ بعد نجاحِ الصنف: أغلقِ الكاميرا (المسحُ اكتمل بنجاح)
             @android.webkit.JavascriptInterface
             fun closeScan() { runOnUiThread { if (scanForSite) { playToneSuccess(); stopSiteScan() } } }
+
+            /**
+             * 📤 v1.6 — ورقةُ مشاركةِ أندرويد الحقيقيّة.
+             *
+             * لماذا: `navigator.share` **غيرُ موجودٍ في WebView إطلاقاً** — لا في
+             * أندرويد ولا في غيرِه. فزرُّ «مشاركة» في الموقعِ كان يفشلُ دائماً على
+             * الجوّالِ مهما أصلحنا الواجهة. الحلُّ أن يُمرّرَ الموقعُ الملفَّ إلينا
+             * فنفتحَ نحن ورقةَ النظام (واتساب · تيليجرام · جهاتُ الاتّصال).
+             *
+             * @param b64  محتوى الملفِّ بترميز Base64 (بلا بادئةِ data:)
+             * @param name اسمُ الملفِّ كما يظهرُ للمستقبِل
+             * @param mime نوعُه (application/pdf غالباً)
+             */
+            @android.webkit.JavascriptInterface
+            fun shareBase64(b64: String, name: String, mime: String) {
+                runOnUiThread { shareFileFromBase64(b64, name, mime) }
+            }
+
+            /** يسألُه الموقعُ ليعرفَ أنّ الجسرَ موجودٌ وصالحٌ للمشاركة. */
+            @android.webkit.JavascriptInterface
+            fun canShareFiles(): Boolean = true
         }, "AndroidApp")
         // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
         findViewById<Button>(R.id.btnMenu).apply {
@@ -374,6 +395,82 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    /** رسالةٌ قصيرةٌ — اختصارٌ يُستعملُ في مسارَي المشاركةِ والتنزيل. */
+    private fun toastMsg(m: String) {
+        Toast.makeText(this, m, Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * 📤 v1.6 — يكتبُ الملفَّ في ذاكرةِ التطبيقِ الخاصّةِ ثمّ يفتحُ ورقةَ المشاركة.
+     *
+     * لماذا FileProvider ولا نمرّرُ المسارَ مباشرة: منذ أندرويد ٧ يرفضُ النظامُ
+     * تمريرَ `file://` إلى تطبيقٍ آخرَ ويرمي FileUriExposedException. فالمزوّدُ
+     * يمنحُ واتساب (أو غيرَه) إذنَ قراءةٍ **مؤقّتاً ولهذا الملفِّ وحدَه**.
+     *
+     * والملفّاتُ في `cache/share` تُنظّفُ قبلَ كلِّ مشاركةٍ فلا تتراكمُ نُسخٌ قديمة.
+     */
+    private fun shareFileFromBase64(b64: String, name: String, mime: String) {
+        try {
+            val dir = java.io.File(cacheDir, "share")
+            if (!dir.exists()) dir.mkdirs()
+            dir.listFiles()?.forEach { runCatching { it.delete() } }
+
+            val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "document.pdf" }
+            val f = java.io.File(dir, safe)
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            java.io.FileOutputStream(f).use { it.write(bytes) }
+
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", f)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = if (mime.isBlank()) "application/pdf" else mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, safe)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, L("إرسال عبر", "Send via"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            toastMsg(L("تعذّرت المشاركة: ", "Share failed: ") + (e.message ?: ""))
+        }
+    }
+
+    /**
+     * ⬇️ v1.6 — تنزيلُ ملفٍّ من داخلِ الموقع.
+     *
+     * حالتان مختلفتان تماماً:
+     *   • `blob:` — ملفٌّ **مصنوعٌ داخلَ الصفحةِ نفسِها** لا يعرفُه النظام، فمديرُ
+     *     التنزيلاتِ لا يستطيعُ جلبَه. نطلبُ من الصفحةِ أن تُمرّرَه عبرَ الجسرِ
+     *     (نفسُ مسارِ المشاركة) بدلَ أن يضيعَ الضغطُ بلا أثر.
+     *   • رابطٌ عاديّ — نُسلّمُه لمديرِ تنزيلاتِ أندرويد ليُكملَه في الخلفيّة.
+     */
+    private fun downloadOrOpen(url: String, contentDisposition: String?, mimeType: String?) {
+        try {
+            if (url.startsWith("blob:")) {
+                toastMsg(L("استعمل زرّ «مشاركة» لإرسال الملفّ",
+                           "Use the Share button to send the file"))
+                return
+            }
+            val name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+            val req = android.app.DownloadManager.Request(android.net.Uri.parse(url)).apply {
+                setTitle(name)
+                setMimeType(mimeType)
+                setNotificationVisibility(
+                    android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS, name)
+                addRequestHeader("Cookie",
+                    android.webkit.CookieManager.getInstance().getCookie(url) ?: "")
+            }
+            (getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager).enqueue(req)
+            toastMsg(L("جارٍ التنزيل: ", "Downloading: ") + name)
+        } catch (e: Exception) {
+            toastMsg(L("تعذّر التنزيل: ", "Download failed: ") + (e.message ?: ""))
+        }
+    }
+
+
+
     /** يفتح الموقع (jawwal) داخل التطبيق فوق شاشة الماسح. */
     @android.annotation.SuppressLint("SetJavaScriptEnabled")
     private fun openSite() {
@@ -389,7 +486,46 @@ class MainActivity : AppCompatActivity() {
                 s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-            w.webViewClient = android.webkit.WebViewClient()
+
+            // 🔗 v1.6 — الروابطُ الخارجيّةُ تخرجُ إلى النظام، لا تُفتحُ داخلَ الموقع.
+            //   كان WebViewClient فارغاً، فأيُّ wa.me أو mailto أو tel يحاولُ
+            //   التحميلَ **داخلَ** الإطارِ فيظهرُ خطأُ صفحةٍ أو شاشةٌ بيضاء.
+            //   القاعدةُ البسيطة: ما كان من خادمِنا يبقى داخلاً، وما سواه يخرج.
+            w.webViewClient = object : android.webkit.WebViewClient() {
+                private fun handle(url: String?): Boolean {
+                    val u = url ?: return false
+                    val server = getServerUrl()
+                    val internal = u.startsWith(server) ||
+                        u.startsWith("file:") || u.startsWith("data:") ||
+                        u.startsWith("javascript:") || u.startsWith("about:")
+                    if (internal) return false
+                    return try {
+                        val i = if (u.startsWith("intent:"))
+                            Intent.parseUri(u, Intent.URI_INTENT_SCHEME)
+                        else Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u))
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(i); true
+                    } catch (e: Exception) {
+                        toastMsg("لا يوجد تطبيقٌ يفتحُ هذا الرابط"); true
+                    }
+                }
+                override fun shouldOverrideUrlLoading(
+                    view: android.webkit.WebView?, req: android.webkit.WebResourceRequest?
+                ): Boolean = handle(req?.url?.toString())
+
+                @Suppress("DEPRECATION")
+                override fun shouldOverrideUrlLoading(
+                    view: android.webkit.WebView?, url: String?
+                ): Boolean = handle(url)
+            }
+
+            // ⬇️ v1.6 — التنزيل: WebView لا يُنزّلُ شيئاً بنفسِه.
+            //   بلا هذا المستمع، زرُّ PDF على الجوّالِ لا يفعلُ شيئاً — بصمتٍ تامّ.
+            //   نستقبلُ نحن الرابطَ ونُسلّمُه لمديرِ تنزيلاتِ أندرويد.
+            w.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+                downloadOrOpen(url, contentDisposition, mimeType)
+            }
+
             w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
             siteLoaded = true
         }

@@ -35,6 +35,21 @@
             </intent-filter>
         </activity>
 
+
+        <!-- 📤 v1.6 — FileProvider: بابُ مشاركةِ الملفّات.
+             أندرويد يمنعُ تمريرَ مسارِ ملفٍّ خامٍّ (file://) إلى تطبيقٍ آخر منذ
+             أندرويد ٧ — يرمي FileUriExposedException. فالملفُّ يُمرَّرُ عبر
+             مزوّدٍ يمنحُ التطبيقَ المستقبِلَ إذناً مؤقّتاً لقراءتِه وحدَه. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>
