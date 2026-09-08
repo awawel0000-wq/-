@@ -326,6 +326,37 @@ class MainActivity : AppCompatActivity() {
             /** يسألُه الموقعُ ليعرفَ أنّ الجسرَ موجودٌ وصالحٌ للمشاركة. */
             @android.webkit.JavascriptInterface
             fun canShareFiles(): Boolean = true
+
+            /**
+             * 🖨️ v1.7 — الطباعةُ الحقيقيّةُ من الجوّال.
+             *
+             * السبب: `window.print()` **لا وجودَ له في WebView** — لا يطبعُ ولا
+             * يرمي خطأً، فالضغطةُ تذهبُ بلا أثرٍ ولا رسالة. وهو بالضبطُ ما رأيتَه.
+             * الصحيحُ أن نُسلّمَ المستندَ لخدمةِ الطباعةِ في أندرويد (PrintManager)
+             * فتفتحُ معاينةَ النظامِ ومنها الطابعةُ أو «حفظ كـPDF».
+             */
+            @android.webkit.JavascriptInterface
+            fun printHtml(html: String, name: String) {
+                runOnUiThread { printDocument(html, if (name.isBlank()) "مستند" else name) }
+            }
+
+            /** 📤 مشاركةُ نصٍّ (لا ملفّ) — لأزرارِ «مشاركة» النصّيّةِ في صفحةِ الجوّال. */
+            @android.webkit.JavascriptInterface
+            fun shareText(text: String, title: String) {
+                runOnUiThread {
+                    try {
+                        val i = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, text)
+                            if (title.isNotBlank()) putExtra(Intent.EXTRA_SUBJECT, title)
+                        }
+                        startActivity(Intent.createChooser(i, L("إرسال عبر", "Send via"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (e: Exception) {
+                        toastMsg(L("تعذّرت المشاركة", "Share failed"))
+                    }
+                }
+            }
         }, "AndroidApp")
         // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
         findViewById<Button>(R.id.btnMenu).apply {
@@ -394,6 +425,62 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📎 v1.8 — رفعُ المرفقات من الجوّال
+    //
+    //   سببُ العطب: عنصرُ <input type="file"> في صفحةِ الويب لا يفتحُ شيئاً
+    //   داخلَ WebView **ما لم يُنفَّذ `onShowFileChooser`**. لا خطأَ ولا رسالة:
+    //   تضغطُ «إضافة مرفق» فلا يحدثُ شيء — وهو ثالثُ عطبٍ من عائلةٍ واحدة
+    //   (الطباعةُ والمشاركةُ والمرفقات): WebView ليس متصفّحاً كاملاً.
+    //
+    //   نفتحُ نحن مُنتقيَ النظامِ (معرضٌ · ملفّاتٌ · كاميرا) ونُعيدُ النتيجةَ
+    //   إلى الصفحةِ كما يفعلُ المتصفّح.
+    // ═══════════════════════════════════════════════════════════════
+    private var filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
+
+    private val fileChooserLauncher =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { res ->
+            val cb = filePathCallback
+            filePathCallback = null
+            cb?.onReceiveValue(
+                android.webkit.WebChromeClient.FileChooserParams.parseResult(res.resultCode, res.data))
+        }
+
+    /** يبقى حيّاً حتى تنتهي الطباعة: WebView محلّيٌّ يُجمَعُ قبلَ أن يُطبَع. */
+    private var printWeb: android.webkit.WebView? = null
+
+    /**
+     * 🖨️ v1.7 — يطبعُ مستنداً عبرَ خدمةِ الطباعةِ في أندرويد.
+     *
+     * نُحمّلُ الوثيقةَ في WebView **غيرِ مرئيّ** بعنوانِ الخادمِ الأساسيّ، فتُحلّ
+     * روابطُ الخطوطِ والأنماطِ النسبيّة (/static/…) كما في الصفحةِ تماماً —
+     * فيخرجُ المطبوعُ مطابقاً لما تراه لا نصّاً عارياً.
+     * ثمّ يُسلَّمُ إلى PrintManager فتفتحُ معاينةُ النظام: طابعةٌ أو حفظٌ PDF.
+     */
+    private fun printDocument(html: String, name: String) {
+        try {
+            val w = android.webkit.WebView(this)
+            w.settings.javaScriptEnabled = false
+            w.webViewClient = object : android.webkit.WebViewClient() {
+                override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                    try {
+                        val pm = getSystemService(Context.PRINT_SERVICE) as android.print.PrintManager
+                        val adapter = (view ?: return).createPrintDocumentAdapter(name)
+                        pm.print(name, adapter, android.print.PrintAttributes.Builder().build())
+                    } catch (e: Exception) {
+                        toastMsg(L("تعذّرت الطباعة: ", "Print failed: ") + (e.message ?: ""))
+                    } finally {
+                        printWeb = null      // أفرِجْ عنه بعدَ تسليمِه للنظام
+                    }
+                }
+            }
+            printWeb = w
+            w.loadDataWithBaseURL(getServerUrl(), html, "text/html", "UTF-8", null)
+        } catch (e: Exception) {
+            toastMsg(L("تعذّرت الطباعة: ", "Print failed: ") + (e.message ?: ""))
+        }
+    }
 
     /** رسالةٌ قصيرةٌ — اختصارٌ يُستعملُ في مسارَي المشاركةِ والتنزيل. */
     private fun toastMsg(m: String) {
@@ -517,6 +604,29 @@ class MainActivity : AppCompatActivity() {
                 override fun shouldOverrideUrlLoading(
                     view: android.webkit.WebView?, url: String?
                 ): Boolean = handle(url)
+            }
+
+            // 📎 v1.8 — مُنتقي الملفّات: بدونه لا يفتحُ زرُّ «إضافة مرفق» شيئاً.
+            w.webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onShowFileChooser(
+                    view: android.webkit.WebView?,
+                    cb: android.webkit.ValueCallback<Array<android.net.Uri>>?,
+                    params: FileChooserParams?
+                ): Boolean {
+                    filePathCallback?.onReceiveValue(null)   // ألغِ طلباً سابقاً معلّقاً
+                    filePathCallback = cb
+                    return try {
+                        val intent = params?.createIntent()
+                            ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "*/*" }
+                        fileChooserLauncher.launch(
+                            Intent.createChooser(intent, L("اختر ملفّاً", "Choose a file")))
+                        true
+                    } catch (e: Exception) {
+                        filePathCallback = null
+                        toastMsg(L("تعذّر فتحُ منتقي الملفّات", "Could not open file picker"))
+                        false
+                    }
+                }
             }
 
             // ⬇️ v1.6 — التنزيل: WebView لا يُنزّلُ شيئاً بنفسِه.
