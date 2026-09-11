@@ -708,10 +708,42 @@ class MainActivity : AppCompatActivity() {
 
 
 
-    /** يفتح الموقع (jawwal) داخل التطبيق فوق شاشة الماسح. */
-    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    /** يتحقّق فعلياً من اتصال الخادم قبل الدخول للموقع، ثم يفتحه فقط لو ردّ فعلاً.
+     *  🐞 v1.20 — كان `openSite()` القديم يفتح الموقعَ مباشرةً بلا أيّ تحقّق، فيظهرُ
+     *  خطأُ متصفّحٍ خامٌ (ERR_CONNECTION_REFUSED) بدل رسالةِ التطبيقِ الواضحة لو الخادم
+     *  مش شغّال أو الشبكة غيرُ سليمة. الآن: تحقّقٌ حقيقيٌّ أوّلاً — الدخولُ فقط بعد ردٍّ. */
     private fun openSite() {
         val w = web ?: return
+        val testUrl = "${getServerUrl()}/api/scan"
+        val request = Request.Builder().url(testUrl).get().build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                updateConnectionUi(false)
+                runOnUiThread {
+                    playToneError(); vibrateError()
+                    toastMsg(L("🔴 لا يوجد اتصال بالخادم — تأكّد من الشبكة والبرنامج قبل فتح الموقع",
+                               "🔴 No connection to the server — check the network and program before opening the site"))
+                }
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val connected = response.code in 200..499
+                updateConnectionUi(connected)
+                if (connected) {
+                    runOnUiThread { showSiteView(w) }
+                } else {
+                    runOnUiThread {
+                        playToneWarning(); vibrateWarning()
+                        toastMsg(L("⚠️ الخادم ردّ بخطأ (${response.code}) — تأكّد أن البرنامج يعمل على الكمبيوتر",
+                                   "⚠️ Server error (${response.code}) — make sure the program is running"))
+                    }
+                }
+            }
+        })
+    }
+
+    /** يعرض واجهة الموقع فعلياً بعد التأكّد من الاتصال (كان هذا جسمَ openSite القديم). */
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    private fun showSiteView(w: android.webkit.WebView) {
         if (!siteLoaded) {
             val s = w.settings
             s.javaScriptEnabled = true
@@ -1225,9 +1257,11 @@ class MainActivity : AppCompatActivity() {
         if (loadedServerAddr == null) { loadedServerAddr = addr; return }
         if (loadedServerAddr == addr) return
         loadedServerAddr = addr
-        if (siteLoaded) {
-            runOnUiThread { web?.loadUrl("$addr/static/m/jawwal.html") }
-        }
+        // 🐞 v1.20 — لا نُحمّل الرابطَ الجديد هنا مباشرةً (كان قد يُحمَّل قبل التأكّد
+        //   الفعليّ من نجاح الاتصال، فيُخزَّن فى الـWebView خطأٌ خامٌ لا يزول إلا
+        //   بتغييرٍ آخر). بدل ذلك: نُصفّر `siteLoaded` فقط — فيمرّ الفتحُ القادمُ
+        //   عبر `openSite()` بتحقّقِ الاتصالِ الحقيقيِّ ثم تحميلٍ نظيفٍ فعلاً.
+        if (siteLoaded) siteLoaded = false
     }
 
     // ═══════════════════════════════════════════════════════════════
