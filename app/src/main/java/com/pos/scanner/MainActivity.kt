@@ -21,6 +21,10 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import okhttp3.*
@@ -133,6 +137,13 @@ class MainActivity : AppCompatActivity() {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
+        }
+        // 🎙️ v1.12 — إذنُ الميكروفونِ للبحثِ الصوتيِّ داخلَ الموقع. طلبٌ منفصلٌ
+        //   برمزٍ مختلفٍ (1002) حتى لا يتأثّرَ منطقُ تشغيلِ الكاميرا أعلاه بترتيبِ النتائج.
+        //   اختياريٌّ تماماً: رفضُه لا يمنعُ التطبيقَ من العمل، فقط يعطّلُ البحثَ الصوتيّ.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
         }
         startHeartbeat()
         restoreActiveStocktake()   // 🧮 استئنافُ جلسةِ الجردِ إن كانت مفتوحةً قبلَ الإغلاق (يعملُ دونَ اتصال)
@@ -371,6 +382,27 @@ class MainActivity : AppCompatActivity() {
                         toastMsg(L("تعذّرت المشاركة", "Share failed"))
                     }
                 }
+            }
+
+            /**
+             * 🔐 v1.12 — تفعيلُ الدخولِ بالبصمةِ من داخلِ التطبيقِ نفسِه.
+             * الموقعُ (وهو مُسجَّلُ الدخولِ فعلاً) يستدعي هذا بعد أن يجلبَ
+             * device_token من الخادمِ (POST /api/auth/qr-devices/activate)،
+             * فنُخزّنه مشفَّراً على الجهاز. لا كلمةَ مرورٍ تُطلَبُ ثانيةً.
+             */
+            @android.webkit.JavascriptInterface
+            fun activateBiometricDevice(token: String) {
+                runOnUiThread { bridgeActivateBiometricDevice(token) }
+            }
+
+            /** يسألُه الموقعُ ليعرفَ: هل البصمةُ مُفعَّلةٌ على هذا الجهازِ أصلاً؟ */
+            @android.webkit.JavascriptInterface
+            fun hasBiometricDevice(): Boolean = bridgeHasBiometricDevice()
+
+            /** إلغاءُ تفعيلِ البصمةِ محليّاً (حذفُ رمزِ الجهازِ المخزَّن). */
+            @android.webkit.JavascriptInterface
+            fun deactivateBiometricDevice() {
+                runOnUiThread { bridgeDeactivateBiometricDevice() }
             }
         }, "AndroidApp")
         // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
@@ -732,6 +764,28 @@ class MainActivity : AppCompatActivity() {
                         filePathCallback = null
                         toastMsg(L("تعذّر فتحُ منتقي الملفّات", "Could not open file picker"))
                         false
+                    }
+                }
+
+                /**
+                 * 🎙️ v1.12 — البحثُ الصوتيُّ داخلَ الموقع (jawwal) يستخدمُ
+                 * `navigator.mediaDevices.getUserMedia({audio:true})` من الـJavaScript.
+                 * WebView يرفضُ الميكروفونَ ما لم نمنحْه صراحةً هنا — تماماً كملفِّ
+                 * الاختيار أعلاه. بلا هذا، طلبُ المتصفّحِ يُرفَضُ صامتاً.
+                 */
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                    val req = request ?: return
+                    runOnUiThread {
+                        val wanted = req.resources.filter {
+                            it == android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                        }.toTypedArray()
+                        if (wanted.isNotEmpty() && ActivityCompat.checkSelfPermission(
+                                this@MainActivity, Manifest.permission.RECORD_AUDIO
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            req.grant(wanted)
+                        } else {
+                            req.deny()
+                        }
                     }
                 }
             }
@@ -1145,6 +1199,130 @@ class MainActivity : AppCompatActivity() {
         val port = prefs.getString("server_port", "5005")?.trim() ?: "5005"
         return "http://$ip:$port"
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🆕 v1.12 — تسجيل الدخول بالبصمة (QR + رمز جهاز)
+    //
+    //   رمزُ الجهازِ (256-bit، صادرٌ من السيرفر بعد أوّل تفعيلٍ) يُخزَّنُ هنا
+    //   مشفَّراً بمفتاح Android Keystore (EncryptedSharedPreferences) — لا يُقرأ
+    //   بلا فتح الجهاز نفسه. البصمةُ لا تصل للسيرفر إطلاقاً؛ هى حارسٌ محليٌّ
+    //   فقط يحمي *استخدامَ* هذا الرمز فى لحظتين: فتح الموقع داخل التطبيق،
+    //   وتأكيد تسجيل دخول كمبيوترٍ آخر (QR).
+    // ═══════════════════════════════════════════════════════════════
+    private fun securePrefs(): SharedPreferences {
+        val masterKey = MasterKey.Builder(this)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        return EncryptedSharedPreferences.create(
+            this, "POS_SCANNER_SECURE", masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    private fun getDeviceToken(): String? =
+        try { securePrefs().getString("device_token", null) } catch (e: Exception) { null }
+
+    private fun saveDeviceToken(token: String) {
+        try { securePrefs().edit().putString("device_token", token).apply() } catch (e: Exception) {}
+    }
+
+    private fun clearDeviceToken() {
+        try { securePrefs().edit().remove("device_token").apply() } catch (e: Exception) {}
+    }
+
+    private fun biometricAvailable(): Boolean {
+        val bm = androidx.biometric.BiometricManager.from(this)
+        return bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+            BiometricManager.BIOMETRIC_SUCCESS
+    }
+
+    /** يعرض حوار البصمة القياسي لأندرويد، وينفّذ [onSuccess] فقط بعد نجاحٍ حقيقيّ. */
+    private fun requireBiometric(reason: String, onSuccess: () -> Unit) {
+        if (!biometricAvailable()) {
+            // لا بصمة مسجَّلة على الجهاز — لا نمنع الاستخدام، فقط لا حماية إضافية هنا.
+            onSuccess(); return
+        }
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                onSuccess()
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                    errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
+                    toastMsg(L("تعذّرت البصمة: $errString", "Fingerprint failed: $errString"))
+                }
+            }
+        })
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(L("تأكيد الهويّة", "Confirm identity"))
+            .setSubtitle(reason)
+            .setNegativeButtonText(L("إلغاء", "Cancel"))
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .build()
+        prompt.authenticate(info)
+    }
+
+    /** يستدعيه الموقعُ (jawwal) بعد أن يُصدر السيرفر رمز جهازٍ جديداً (تفعيلٌ أوّل مرّة،
+     *  والمستخدمُ مسجَّلٌ دخوله بالفعل داخل الـWebView — لا حاجة لكلمة مرورٍ هنا). */
+    private fun bridgeActivateBiometricDevice(token: String) {
+        saveDeviceToken(token)
+        runOnUiThread { toastMsg(L("✅ تفعّلت البصمة للدخول على هذا الجهاز", "✅ Fingerprint login activated on this device")) }
+    }
+
+    private fun bridgeHasBiometricDevice(): Boolean = !getDeviceToken().isNullOrBlank()
+
+    private fun bridgeDeactivateBiometricDevice() {
+        clearDeviceToken()
+        runOnUiThread { toastMsg(L("تمّ إلغاء البصمة على هذا الجهاز", "Fingerprint login deactivated on this device")) }
+    }
+
+    /** رمز QR دخولٍ (من شاشة الكمبيوتر): awael://login?token=... — يُطلب بصمةً محليّةً
+     *  (لا كلمة مرور) ثم يؤكّد الجلسة على السيرفر برمز الجهاز المحفوظ. */
+    private fun handleLoginQR(code: String) {
+        val uri = try { android.net.Uri.parse(code) } catch (e: Exception) { null }
+        val qrToken = uri?.getQueryParameter("token")
+        if (qrToken.isNullOrBlank()) {
+            runOnUiThread { playToneWarning(); vibrateWarning()
+                toastMsg(L("رمز دخولٍ غير صالح", "Invalid login QR")) }
+            return
+        }
+        val deviceToken = getDeviceToken()
+        if (deviceToken.isNullOrBlank()) {
+            runOnUiThread { playToneWarning(); vibrateWarning()
+                toastMsg(L("فعّل البصمة أوّلاً من داخل النظام (الإعدادات)",
+                           "Activate fingerprint login first, inside the system settings")) }
+            return
+        }
+        requireBiometric(L("تأكيد تسجيل الدخول على كمبيوترٍ آخر", "Confirm login on another computer")) {
+            confirmQrLoginOnServer(qrToken, deviceToken)
+        }
+    }
+
+    private fun confirmQrLoginOnServer(qrToken: String, deviceToken: String) {
+        val body = JSONObject().apply { put("token", qrToken); put("device_token", deviceToken) }
+            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder().url("${getServerUrl()}/api/auth/qr-session/confirm").post(body).build()
+        httpClient.newCall(req).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread { playToneError(); vibrateError()
+                    toastMsg(L("تعذّر الاتصال بالسيرفر", "Could not reach the server")) }
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val ok = try { JSONObject(response.body?.string() ?: "{}").optBoolean("success", false) } catch (e: Exception) { false }
+                runOnUiThread {
+                    if (ok && response.isSuccessful) {
+                        playToneSuccess(); vibrateSuccess()
+                        toastMsg(L("✅ تمّ تسجيل الدخول على الكمبيوتر", "✅ Logged in on the computer"))
+                    } else {
+                        playToneError(); vibrateError()
+                        toastMsg(L("انتهت صلاحية الرمز — افتح شاشة الدخول من جديد", "QR expired — reopen the login screen"))
+                    }
+                }
+            }
+        })
+    }
     private fun setDotColor(colorHex: String) {
         val shape = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -1424,6 +1602,11 @@ class MainActivity : AppCompatActivity() {
         // 🧮 رمزُ جلسةِ جردٍ (QR من شاشة الجرد في الكمبيوتر)؟ ادخلْ وضعَ الجرد.
         if (code.startsWith("awael://stocktake")) {
             handleStocktakeQR(code)
+            return
+        }
+        // 🔐 v1.12 — رمزُ تسجيلِ دخولٍ (QR من شاشة الدخول فى الكمبيوتر)؟ أكّدْه بالبصمة.
+        if (code.startsWith("awael://login")) {
+            handleLoginQR(code)
             return
         }
         // 🧮 نحن داخلَ وضعِ الجرد؟ الباركودُ يُضافُ للقائمةِ المحلّيّةِ (لا يُرسَلُ للكاشير).

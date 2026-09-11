@@ -11,8 +11,8 @@ android {
         applicationId = "com.pos.scanner"
         minSdk = 23
         targetSdk = 34
-        versionCode = 34
-        versionName = "1.11"
+        versionCode = 35
+        versionName = "1.12"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,4 +52,9 @@ dependencies {
 
     // OkHttp — إرسال فوري محليّ
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // 🆕 v1.12 — تسجيل الدخول بالبصمة (QR + رمز جهاز): BiometricPrompt يحرس
+    //   رمزَ الجهاز، وEncryptedSharedPreferences يخزّنه مشفَّراً على القرص (Android Keystore).
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }

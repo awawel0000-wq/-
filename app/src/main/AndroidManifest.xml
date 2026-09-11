@@ -7,10 +7,20 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 🆕 v1.12 — البحث الصوتي داخل الموقع (الميكروفون) وتسجيل الدخول بالبصمة -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- الكاميرا مستحبّة لا إجبارية: النظام يعمل حتى بلا كاميرا -->
     <uses-feature
         android:name="android.hardware.camera"
+        android:required="false" />
+    <!-- 🆕 v1.12 — الميكروفون والبصمة مستحبّان لا إجباريّان: التطبيق يعمل حتى بلا أيٍّ منهما -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.fingerprint"
         android:required="false" />
 
     <application
