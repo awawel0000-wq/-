@@ -1346,6 +1346,10 @@ class MainActivity : AppCompatActivity() {
             //   إطلاقاً رغم أن الدخولَ نفسه يعمل. نحفظه هنا فقط لو وُجد فى الرمز (لا نمسح
             //   اقتراناً سابقاً صحيحاً بفراغ لو رمزٌ قديمٌ بلا sid وصل بطريقةٍ ما).
             val qrSid = uri.getQueryParameter("sid")
+            // 🐞 v10.510 — مفتاحُ حمايةِ الماسحِ (scan_token) **لا** يصل هنا من رمز QR
+            //   نفسِه عمداً (أمانٌ: رمزُ الدخول يظهر قبل تسجيل الدخول، وتضمين المفتاح
+            //   الثابت فيه كان سيُسرِّبه لأي عابرٍ يصوّر الشاشة). يصل بدلاً من هذا فى ردّ
+            //   `confirmQrLoginOnServer` — فقط بعد نجاح مصادقةٍ فعليّة.
             val editor = prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort)
             if (!qrSid.isNullOrBlank()) editor.putString("session_id", qrSid)
             editor.apply()
@@ -1386,7 +1390,23 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onResponse(call: Call, response: Response) {
                 loginFlowBusy = false   // 🐞 v1.14
-                val ok = try { JSONObject(response.body?.string() ?: "{}").optBoolean("success", false) } catch (e: Exception) { false }
+                val bodyStr = response.body?.string() ?: "{}"
+                val json = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
+                val ok = json.optBoolean("success", false)
+                if (ok && response.isSuccessful) {
+                    // 🐞 v10.510 — مفتاحُ حمايةِ الماسحِ (scan_token) وsid يصلان هنا فقط —
+                    //   بعد نجاح مصادقةٍ حقيقيّة — لا داخل رمز QR نفسه (كان سيُسرَّب لأي عابرٍ
+                    //   يصوّر شاشةَ الدخول قبل أي تسجيل دخولٍ فعلي). بدونهما كان كلُّ باركودٍ
+                    //   يُرفَض صامتاً من الخادم رغم أن الدخول نفسه ناجح.
+                    val sSid = json.optString("sid", "")
+                    val sTok = json.optString("scan_token", "")
+                    if (sSid.isNotBlank() || sTok.isNotBlank()) {
+                        val e2 = prefs.edit()
+                        if (sSid.isNotBlank()) e2.putString("session_id", sSid)
+                        if (sTok.isNotBlank()) e2.putString("scan_token", sTok)
+                        e2.apply()
+                    }
+                }
                 runOnUiThread {
                     if (ok && response.isSuccessful) {
                         playToneSuccess(); vibrateSuccess()
@@ -1750,11 +1770,29 @@ class MainActivity : AppCompatActivity() {
                 val responseBody = response.body?.string() ?: ""
                 try {
                     val resJson = JSONObject(responseBody)
+                    // 🐞 v10.510 — كانت isFound تفترض true افتراضياً لو ردّ الخطأ (403 مفتاح
+                    //   جلسة غير صالح، 400 باركود فارغ...) ما فيهوش حقل "found" أصلاً، فيقع
+                    //   فى الفرع الأخير («تم النقل بنجاح») رغم أن الخادم رفض الطلب فعلياً —
+                    //   بالضبط ما بلَّغه المستخدم: «يقول تم النقل بنجاح ولكن لا ينقل». نفحص
+                    //   نجاح الاستجابة (2xx) أوّلاً ونعرض رسالة الخادم الحقيقية عند الرفض.
+                    if (!response.isSuccessful) {
+                        val errMsg = resJson.optString("error", resJson.optString("message", "خطأ من الخادم (${response.code})"))
+                        runOnUiThread {
+                            playToneError(); vibrateError()
+                            showTopResult(L("🔴 رُفض: $errMsg", "🔴 Rejected: $errMsg"), "#B91C1C")
+                            speak("تعذّر الإرسال", "Send failed")
+                            txtItemName.text = ""
+                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
+                            txtStatusBadge.text = "❌ $errMsg"
+                            setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                        }
+                        return
+                    }
                     val isFound = resJson.optBoolean("found", true)
                     val itemName = resJson.optString("item_name", resJson.optString("name", "صنف: $code"))
                     val itemPrice = resJson.optString("price", "")
                     runOnUiThread {
-                        if (response.isSuccessful && isFound) {
+                        if (isFound) {
                             playToneSuccess()
                             vibrateSuccess()
                             bumpScanCount()
@@ -1767,7 +1805,10 @@ class MainActivity : AppCompatActivity() {
                                 else L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("✅ تم الإرسال والإضافة للفاتورة", "✅ Sent & added to invoice")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
-                        } else if (!isFound || response.code == 404) {
+                        } else {
+                            // 🐞 v10.510 — كان هنا فرعٌ ثالثٌ ميت («تم النقل بنجاح») لا يُصَل إليه أبداً
+                            //   الآن بعد أن صار isFound المفتاحَ الوحيدَ هنا (الاستجابةُ ناجحةٌ مضمونةً
+                            //   من الفحص أعلاه) — أُزيل، فلا التباس فى القراءة لاحقاً.
                             playToneWarning()
                             vibrateWarning()
                             showTopResult(L("⚠️ صنف غير معرّف", "⚠️ Unknown item"), "#B45309")
@@ -1776,16 +1817,6 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("لا يوجد صنف بهذا الباركود في النظام", "No item with this barcode")
                             setBadgeStyle("#78350F", "#F59E0B", "#D97706")
-                        } else {
-                            playToneSuccess()
-                            vibrateSuccess()
-                            bumpScanCount()
-                            showTopResult(L("✅ تم الاستلام", "✅ Received"), "#15803D")
-                            speak("تم الاستلام", "Received")
-                            txtItemName.text = ""
-                            txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
-                            txtStatusBadge.text = L("✅ تم النقل بنجاح", "✅ Transferred")
-                            setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
                         }
                     }
                 } catch (e: Exception) {
