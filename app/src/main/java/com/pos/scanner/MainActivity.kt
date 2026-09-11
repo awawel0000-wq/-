@@ -94,6 +94,9 @@ class MainActivity : AppCompatActivity() {
     private var web: android.webkit.WebView? = null
     private var btnSite: Button? = null
     private var siteLoaded = false
+    // 🐞 v1.19 — آخرُ عنوانٍ (ip:port) حُمِّل فعلياً داخل الـWebView. لازمٌ لاكتشافِ
+    //   أيّ تغييرٍ فى العنوان بعد أوّل تحميل (انظر reloadSiteIfAddressChanged).
+    private var loadedServerAddr: String? = null
     // وضعُ المسح للموقع: عند طلبِ الموقعِ باركوداً، نُظهرُ الكاميرا فوقه ونحقنُ النتيجةَ فيه بدلاً من الكمبيوتر
     private var scanForSite = false
     private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
@@ -300,6 +303,7 @@ class MainActivity : AppCompatActivity() {
             val ip = edtServerIp.text.toString().trim()
             val port = edtServerPort.text.toString().trim()
             prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
+            reloadSiteIfAddressChanged()
             closeSettings()
             Toast.makeText(this, L("تم حفظ الإعدادات بنجاح!", "Settings saved!"), Toast.LENGTH_SHORT).show()
             checkServerStatus()
@@ -806,6 +810,7 @@ class MainActivity : AppCompatActivity() {
 
             w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
             siteLoaded = true
+            loadedServerAddr = getServerUrl()
         }
         w.visibility = View.VISIBLE
         w.bringToFront()
@@ -1207,6 +1212,24 @@ class MainActivity : AppCompatActivity() {
         return "http://$ip:$port"
     }
 
+    /** 🐞 v1.19 — أيّ تغييرٍ فعليٍّ فى عنوان الخادم (ip/port) لازمٌ يُعيد تحميلَ
+     *   الموقعِ داخل الـWebView فوراً. قبل هذا: siteLoaded كان يبقى true للأبد طولَ
+     *   عمرِ العمليّة، فالموقعُ يفضلُ واقفاً على أوّل عنوانٍ حُمِّل بيه — أيّ إعادةِ ربطٍ
+     *   (قديمة أو حديثة أو تعديلٍ يدويّ من الإعدادات) لا تُغيّر شيئاً فى الواجهةِ الفعليّة
+     *   إلا بعد إغلاق التطبيق بالكامل (force stop) وإعادة فتحه. هذا هو السببُ الحقيقيُّ
+     *   وراء ERR_CONNECTION_REFUSED المستمرّ رغم تغييرِ الربط — لا علاقةَ له بطريقةِ
+     *   الربط (قديم/حديث) نفسِها. نستدعي هذه الدالة عقب كلّ حفظٍ لعنوان الخادم.
+     */
+    private fun reloadSiteIfAddressChanged() {
+        val addr = getServerUrl()
+        if (loadedServerAddr == null) { loadedServerAddr = addr; return }
+        if (loadedServerAddr == addr) return
+        loadedServerAddr = addr
+        if (siteLoaded) {
+            runOnUiThread { web?.loadUrl("$addr/static/m/jawwal.html") }
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // 🆕 v1.12 — تسجيل الدخول بالبصمة (QR + رمز جهاز)
     //
@@ -1353,6 +1376,7 @@ class MainActivity : AppCompatActivity() {
             val editor = prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort)
             if (!qrSid.isNullOrBlank()) editor.putString("session_id", qrSid)
             editor.apply()
+            reloadSiteIfAddressChanged()
             runOnUiThread { edtServerIp.setText(qrIp); edtServerPort.setText(qrPort) }
         }
         val deviceToken = getDeviceToken()
@@ -1629,6 +1653,7 @@ class MainActivity : AppCompatActivity() {
                 .putString("session_id", sid)
                 .putString("scan_token", token)
                 .apply()
+            reloadSiteIfAddressChanged()
             runOnUiThread {
                 // حُفظ العنوان — لكن لا نُعلنُ النجاحَ قبلَ التحقّقِ الفعليِّ من الخادم
                 edtServerIp.setText(ip); edtServerPort.setText(port)
@@ -1923,6 +1948,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (ip.isNotBlank()) {
                 prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
+                reloadSiteIfAddressChanged()
                 edtServerIp.setText(ip); edtServerPort.setText(port)
             }
             enterStocktakeSession(sid, ccode, name, counter, retain, true)
