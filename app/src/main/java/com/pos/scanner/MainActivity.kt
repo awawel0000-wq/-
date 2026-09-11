@@ -80,6 +80,13 @@ class MainActivity : AppCompatActivity() {
     private var lastScanTime: Long = 0L
     private var isFrameClear: Boolean = true
     private var emptyFramesCount: Int = 0
+    // 🐞 v1.14 — أثناء انتظار نتيجة البصمة لتأكيد دخول QR: الكاميرا تبقى تعمل
+    //   (بلا إيقافٍ)، فإن ابتعد المستخدمُ بالجوّال قليلاً (وهو يُعيد وضعَ إصبعه
+    //   على حسّاس البصمة) قد تلتقط أيَّ باركودٍ آخر قريبٍ فوراً (كودٌ مختلفٌ
+    //   يتجاوز التبريدَ الطبيعيّ) — فتظهر شاشةُ «صنفٌ غير معرّف» رغم أنّ الأمر
+    //   لا علاقة له بالدخول إطلاقاً. نُجمّد استقبال أيّ مسحٍ آخر من لحظة قراءة
+    //   رمز الدخول حتى تنتهي محاولةُ الدخول هذه (نجاحاً أو فشلاً أو إلغاءً).
+    private var loginFlowBusy: Boolean = false
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private var isServerConnected = false
     private var toneGenerator: ToneGenerator? = null
@@ -1238,7 +1245,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** يعرض حوار البصمة القياسي لأندرويد، وينفّذ [onSuccess] فقط بعد نجاحٍ حقيقيّ. */
-    private fun requireBiometric(reason: String, onSuccess: () -> Unit) {
+    private fun requireBiometric(reason: String, onFail: (() -> Unit)? = null, onSuccess: () -> Unit) {
         if (!biometricAvailable()) {
             // لا بصمة مسجَّلة على الجهاز — لا نمنع الاستخدام، فقط لا حماية إضافية هنا.
             onSuccess(); return
@@ -1253,6 +1260,7 @@ class MainActivity : AppCompatActivity() {
                     errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
                     toastMsg(L("تعذّرت البصمة: $errString", "Fingerprint failed: $errString"))
                 }
+                onFail?.invoke()
             }
         })
         val info = BiometricPrompt.PromptInfo.Builder()
@@ -1316,7 +1324,9 @@ class MainActivity : AppCompatActivity() {
                            "Activate fingerprint login first, inside the system settings")) }
             return
         }
-        requireBiometric(L("تأكيد تسجيل الدخول على كمبيوترٍ آخر", "Confirm login on another computer")) {
+        loginFlowBusy = true   // 🐞 v1.14 — نُجمّد استقبال أيّ مسحٍ آخر حتى تنتهي محاولةُ الدخول هذه
+        requireBiometric(L("تأكيد تسجيل الدخول على كمبيوترٍ آخر", "Confirm login on another computer"),
+            onFail = { loginFlowBusy = false }) {
             confirmQrLoginOnServer(qrToken, deviceToken)
         }
     }
@@ -1327,10 +1337,12 @@ class MainActivity : AppCompatActivity() {
         val req = Request.Builder().url("${getServerUrl()}/api/auth/qr-session/confirm").post(body).build()
         httpClient.newCall(req).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                loginFlowBusy = false   // 🐞 v1.14
                 runOnUiThread { playToneError(); vibrateError()
                     toastMsg(L("تعذّر الاتصال بالسيرفر", "Could not reach the server")) }
             }
             override fun onResponse(call: Call, response: Response) {
+                loginFlowBusy = false   // 🐞 v1.14
                 val ok = try { JSONObject(response.body?.string() ?: "{}").optBoolean("success", false) } catch (e: Exception) { false }
                 runOnUiThread {
                     if (ok && response.isSuccessful) {
@@ -1625,6 +1637,10 @@ class MainActivity : AppCompatActivity() {
             handleStocktakeQR(code)
             return
         }
+        // 🐞 v1.14 — محاولةُ دخولٍ سابقةٌ لا تزال تنتظر نتيجةَ البصمة: تجاهلْ أيَّ
+        //   مسحٍ آخر (الكاميرا لا تزال تعمل، وقد تلتقط باركودَ صنفٍ قريبٍ خطأً
+        //   وأنت تُعيد وضعَ إصبعك على الحسّاس) حتى تنتهي هذه المحاولةُ تماماً.
+        if (loginFlowBusy) return
         // 🔐 v1.12 — رمزُ تسجيلِ دخولٍ (QR من شاشة الدخول فى الكمبيوتر)؟ أكّدْه بالبصمة.
         if (code.startsWith("awael://login")) {
             handleLoginQR(code)
