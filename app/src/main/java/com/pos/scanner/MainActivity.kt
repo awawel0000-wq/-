@@ -1265,10 +1265,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** يستدعيه الموقعُ (jawwal) بعد أن يُصدر السيرفر رمز جهازٍ جديداً (تفعيلٌ أوّل مرّة،
-     *  والمستخدمُ مسجَّلٌ دخوله بالفعل داخل الـWebView — لا حاجة لكلمة مرورٍ هنا). */
+     *  والمستخدمُ مسجَّلٌ دخوله بالفعل داخل الـWebView — لا حاجة لكلمة مرورٍ هنا).
+     *
+     *  🐞 v1.13 — كانت تحفظ الرمزَ فوراً بلا أيّ بصمةٍ فعليّة، فتقولُ «تفعّلت البصمة»
+     *  حتى على جهازٍ لم يُسجَّل عليه بصمةٌ إطلاقاً — خللٌ أمنيٌّ حقيقيّ (أيُّ ممسكٍ
+     *  بالجهاز يُفعّل الدخول بلا أيّ عائق) ولُبسٌ على المستخدم (لم يوضَع إصبعٌ قط).
+     *  الآن: لا حفظَ إلا بعد بصمةٍ ناجحةٍ فعلاً؛ ولو لم تكن مُسجَّلةً على الجهاز
+     *  أصلاً، نرفض التفعيل ونوجّه المستخدم لتسجيلها من إعدادات الجهاز أوّلاً —
+     *  ذاك تسجيلُ البصمة نفسها (اضغط إصبعك ٣ مرّات فتُحفَظ) لا نملك نحن صلاحيّته،
+     *  فهو من صنيع نظام أندرويد حصراً لأسبابٍ أمنيّة. */
     private fun bridgeActivateBiometricDevice(token: String) {
-        saveDeviceToken(token)
-        runOnUiThread { toastMsg(L("✅ تفعّلت البصمة للدخول على هذا الجهاز", "✅ Fingerprint login activated on this device")) }
+        if (!biometricAvailable()) {
+            runOnUiThread {
+                toastMsg(L(
+                    "لا توجد بصمةٌ مسجَّلةٌ على هذا الجهاز. افتح إعدادات الجهاز ← الأمان ← البصمة، "
+                        + "وسجّل بصمتك هناك أوّلاً (يطلب منك وضع إصبعك عدّة مرّات ثم يحفظها)، ثم ارجع واضغط «تفعيل» من جديد.",
+                    "No fingerprint is enrolled on this device. Open device Settings → Security → Fingerprint, "
+                        + "register one there first (it asks you to touch the sensor a few times then saves it), then come back and tap Activate again."
+                ))
+            }
+            return
+        }
+        requireBiometric(L("ضع بصمتك لتأكيد تفعيل الدخول بها", "Scan your fingerprint to confirm enabling fingerprint login")) {
+            saveDeviceToken(token)
+            runOnUiThread { toastMsg(L("✅ تفعّلت البصمة للدخول على هذا الجهاز", "✅ Fingerprint login activated on this device")) }
+        }
     }
 
     private fun bridgeHasBiometricDevice(): Boolean = !getDeviceToken().isNullOrBlank()
