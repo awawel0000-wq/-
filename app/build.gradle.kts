@@ -11,15 +11,30 @@ android {
         applicationId = "com.pos.scanner"
         minSdk = 23
         targetSdk = 34
-        versionCode = 39
-        versionName = "1.16"
+        versionCode = 40
+        versionName = "1.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 🆕 v1.17 — توقيعٌ ثابتٌ لكلّ بناء: بلا هذا، كلّ بناءٍ (من أيّ جهاز/بيئة) يُنتج
+    //   شهادةً عشوائيّةً مختلفة، فيرفض أندرويد تحديثَ التطبيق فوق النسخة السابقة
+    //   (يطلب إلغاء تثبيتٍ كاملاً كلَّ مرّة — هذا بالضبط ما كان يحدث). الملفّ
+    //   alawael-release.keystore مرفقٌ فى هذا المجلّد نفسه؛ طالما استُعمل هو نفسُه
+    //   فى كلّ بناءٍ قادم، تُحدَّث كلُّ نسخةٍ فوق التى قبلها بلا إلغاء تثبيت أبداً.
+    signingConfigs {
+        create("release") {
+            storeFile = file("alawael-release.keystore")
+            storePassword = "Alawael@2026Key"
+            keyAlias = "alawael"
+            keyPassword = "Alawael@2026Key"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

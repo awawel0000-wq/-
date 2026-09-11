@@ -1303,6 +1303,22 @@ class MainActivity : AppCompatActivity() {
     private fun bridgeHasBiometricDevice(): Boolean = !getDeviceToken().isNullOrBlank()
 
     private fun bridgeDeactivateBiometricDevice() {
+        // 🐞 v10.509 — كانت تمسح الرمز محليّاً فقط وتتركه صالحاً على السيرفر للأبد
+        //   (لو تسرّب قبل الإلغاء يبقى شغّالاً رغم «الإلغاء»). الآن نسحبه من السيرفر
+        //   أوّلاً بأفضل جهد — لا ننتظره ولا نوقف الإلغاء المحليّ لو تعذّر الاتصال؛
+        //   إلغاء البصمة على هذا الجهاز نفسه هو الأهمّ لصاحبه ولا يجب أن يتعطّل بلا شبكة.
+        val tok = getDeviceToken()
+        if (!tok.isNullOrBlank()) {
+            try {
+                val body = JSONObject().apply { put("device_token", tok) }
+                    .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val req = Request.Builder().url("${getServerUrl()}/api/auth/qr-devices/revoke-self").post(body).build()
+                httpClient.newCall(req).enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) { /* بلا شبكةٍ الآن — لا نُعطّل الإلغاء المحليّ */ }
+                    override fun onResponse(call: Call, response: Response) { response.close() }
+                })
+            } catch (e: Exception) { /* أفضل جهدٍ فقط */ }
+        }
         clearDeviceToken()
         runOnUiThread { toastMsg(L("تمّ إلغاء البصمة على هذا الجهاز", "Fingerprint login deactivated on this device")) }
     }
@@ -1324,7 +1340,15 @@ class MainActivity : AppCompatActivity() {
         val qrIp = uri?.getQueryParameter("ip")
         if (!qrIp.isNullOrBlank()) {
             val qrPort = uri.getQueryParameter("port") ?: "5005"
-            prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort).apply()
+            // 🐞 v1.17 — رمزُ الدخول (منذ v10.508) يحملُ sid هذا الكاشير أيضاً، تماماً
+            //   كرمز /link. بدونه كان الجوّالُ يبعث الباركودَ تحت 'default' بينما
+            //   المتصفحُ يستمعُ تحت sid السيرفر (يوزر+جهاز) ⇒ الباركودُ لا يصل للكمبيوتر
+            //   إطلاقاً رغم أن الدخولَ نفسه يعمل. نحفظه هنا فقط لو وُجد فى الرمز (لا نمسح
+            //   اقتراناً سابقاً صحيحاً بفراغ لو رمزٌ قديمٌ بلا sid وصل بطريقةٍ ما).
+            val qrSid = uri.getQueryParameter("sid")
+            val editor = prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort)
+            if (!qrSid.isNullOrBlank()) editor.putString("session_id", qrSid)
+            editor.apply()
             runOnUiThread { edtServerIp.setText(qrIp); edtServerPort.setText(qrPort) }
         }
         val deviceToken = getDeviceToken()
