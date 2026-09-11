@@ -1317,11 +1317,30 @@ class MainActivity : AppCompatActivity() {
                 toastMsg(L("رمز دخولٍ غير صالح", "Invalid login QR")) }
             return
         }
+        // 🐞 v1.15 — رمزُ الدخول (منذ v10.506) يحملُ عنوانَ هذا الكمبيوترِ أيضاً (ip/port)،
+        //   تماماً كرمز /link القديم. نحفظه فوراً بلا شرط: فجوّالٌ لم يُقترن بهذا الكمبيوتر
+        //   من قبل (يعرض «غير متصل» لأنه لا يعرف عنوانه على الشبكة) يصير متصلاً بمجرد
+        //   مسح رمز الدخول نفسه — بلا حاجةٍ لصفحة /link كخطوةٍ منفصلة أولاً.
+        val qrIp = uri?.getQueryParameter("ip")
+        if (!qrIp.isNullOrBlank()) {
+            val qrPort = uri.getQueryParameter("port") ?: "5005"
+            prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort).apply()
+            runOnUiThread { edtServerIp.setText(qrIp); edtServerPort.setText(qrPort) }
+        }
         val deviceToken = getDeviceToken()
         if (deviceToken.isNullOrBlank()) {
-            runOnUiThread { playToneWarning(); vibrateWarning()
-                toastMsg(L("فعّل البصمة أوّلاً من داخل النظام (الإعدادات)",
-                           "Activate fingerprint login first, inside the system settings")) }
+            // 🐞 v1.14 — كانت تكتفي بتوستٍ ثم تتركُ المستخدمَ عالقاً (لازم يفتح القائمةَ
+            //   يدويّاً ويلاقي الموقعَ ثم الإعداداتِ بنفسه). الآن: نفتحُ له الموقعَ مباشرةً
+            //   فوق شاشة الماسح — فيُسجّل دخولَه بيوزره وكلمة مروره أوّلَ مرّة (هذه الخطوةُ
+            //   لا غنى عنها: رمزُ QR ظاهرٌ لأيّ أحدٍ ينظر للشاشة، فلا يصلحُ إثباتَ هويّةٍ
+            //   وحدَه — يلزم كلمةُ مرورٍ أو بصمةٌ مفعَّلةٌ مسبقاً)، ثم من القائمة يفعّل
+            //   البصمةَ بضغطةٍ واحدة. تجربةٌ متّصلةٌ بدل توستٍ ثم طريقٍ مسدود.
+            runOnUiThread {
+                playToneWarning(); vibrateWarning()
+                toastMsg(L("سجّل دخولك أوّلاً بيوزرك، ثم فعّل البصمة من القائمة ← الإعدادات",
+                           "Log in with your username first, then activate fingerprint from the menu → settings"))
+                openSite()
+            }
             return
         }
         loginFlowBusy = true   // 🐞 v1.14 — نُجمّد استقبال أيّ مسحٍ آخر حتى تنتهي محاولةُ الدخول هذه
