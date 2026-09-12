@@ -22,13 +22,22 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Build APK with Gradle Wrapper (Gradle 8.7 مثبّت داخل المشروع)
+    # 🐞 v10.514 — كان يبني assembleDebug: كلّ تشغيلةٍ على GitHub Actions تفتح جهازاً
+    #   افتراضياً جديداً كلّياً (Ubuntu VM جديدة)، فلا يوجد ~/.android/debug.keystore
+    #   محفوظٌ من مرّةٍ لأخرى — Gradle يُنشئ debug.keystore عشوائياً جديداً كل مرّة،
+    #   فيخرج APK بشهادةٍ مختلفة عن السابق **دائماً**، مهما فعلنا فى v1.17 (التوقيع
+    #   الثابت هناك موجودٌ فقط فى buildTypes.release، ولم يكن هذا المسار يستخدمه
+    #   إطلاقاً). هذا هو السببُ الحقيقيُّ الكامل وراء "لازم تلغي التثبيت كل مرّة" —
+    #   لا علاقة له بما أصلحناه سابقاً فى build.gradle.kts، لأن ذاك الإصلاح لم يكن
+    #   يُستدعى من هنا قط. الحل: نبني assembleRelease (يستخدم alawael-release.keystore
+    #   الثابت المرفَق فى المستودع نفسه)، فيحمل كلّ APK قادمٍ نفسَ الشهادة دائماً.
+    - name: Build Signed Release APK with Gradle Wrapper (Gradle 8.7 مثبّت داخل المشروع)
       run: |
         chmod +x ./gradlew
-        ./gradlew assembleDebug --no-daemon --stacktrace
+        ./gradlew assembleRelease --no-daemon --stacktrace
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: BarcodeScannerApp-APK
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: app/build/outputs/apk/release/app-release.apk
