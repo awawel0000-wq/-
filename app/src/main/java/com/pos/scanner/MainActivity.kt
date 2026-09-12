@@ -97,6 +97,12 @@ class MainActivity : AppCompatActivity() {
     // 🐞 v1.19 — آخرُ عنوانٍ (ip:port) حُمِّل فعلياً داخل الـWebView. لازمٌ لاكتشافِ
     //   أيّ تغييرٍ فى العنوان بعد أوّل تحميل (انظر reloadSiteIfAddressChanged).
     private var loadedServerAddr: String? = null
+    // 🐞 v1.22 — مهلةُ المسحِ التلقائيّة الجارية حالياً (إن وُجدت) — انظر scheduleAutoClear.
+    private var resultClearRunnable: Runnable? = null
+    // 🐞 v1.22 — هل انكشف الـWebView فعلياً (بعد onPageFinished)؟ يمنع كشفاً مزدوجاً
+    //   ويُتيح مهلةَ أمانٍ لو تعطّل onPageFinished — انظر showSiteView/revealSiteView.
+    private var _siteRevealed = false
+    private var _siteRevealFallback: Runnable? = null
     // وضعُ المسح للموقع: عند طلبِ الموقعِ باركوداً، نُظهرُ الكاميرا فوقه ونحقنُ النتيجةَ فيه بدلاً من الكمبيوتر
     private var scanForSite = false
     private var scanSiteField = ""      // مُعرِّفُ الخانةِ في الموقع
@@ -414,6 +420,14 @@ class MainActivity : AppCompatActivity() {
             @android.webkit.JavascriptInterface
             fun deactivateBiometricDevice() {
                 runOnUiThread { bridgeDeactivateBiometricDevice() }
+            }
+
+            /** 🆕 v1.21 — تسجيلُ دخول شاشةِ الموقعِ نفسِها (هنا على الجوّال) بالبصمة، بلا
+             *  كتابة يوزر/باسورد. الموقعُ يستدعيه فقط لو hasBiometricDevice() صحيحة، ثم
+             *  ينتظر النتيجة عبر window.onBiometricLoginResult(ok, ...). */
+            @android.webkit.JavascriptInterface
+            fun loginWithBiometric() {
+                runOnUiThread { bridgeLoginWithBiometric() }
             }
         }, "AndroidApp")
         // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
@@ -786,6 +800,18 @@ class MainActivity : AppCompatActivity() {
                 override fun shouldOverrideUrlLoading(
                     view: android.webkit.WebView?, url: String?
                 ): Boolean = handle(url)
+
+                // 🐞 v1.22 — لا نكشف الـWebView (وننتقل فعلياً من شاشة الماسح) إلا بعد أن
+                //   تنتهي الصفحةُ فعلاً من التحميل. قبل هذا: كان الانتقالُ يحدث فوراً مع
+                //   loadUrl، فيظهر إطارٌ أسودُ/فارغٌ لثوانٍ (خصوصاً على شبكةٍ بطيئة أو
+                //   مقيّدة) قبل ظهور محتوى الصفحة — بلاغ المستخدم: «فتح شاشة سوداء،
+                //   رجعت لقيتها اتصلت ثم راحت للموقع». الفحصُ السابق (openSite) يتأكّد
+                //   فقط من ردّ الخادم على /api/scan؛ لا يضمن أن الصفحةَ نفسَها (jawwal.html
+                //   بكل أصولها) ستُحمَّل بسرعة، فالانتظارُ الحقيقيُّ يجب أن يمتدّ لهذه اللحظة.
+                override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    if (!_siteRevealed) revealSiteView(w)
+                }
             }
 
             // 📎 v1.8 — مُنتقي الملفّات: بدونه لا يفتحُ زرُّ «إضافة مرفق» شيئاً.
@@ -840,10 +866,37 @@ class MainActivity : AppCompatActivity() {
                 downloadOrOpen(url, contentDisposition, mimeType)
             }
 
+            // ⏳ نبقى على شاشة الماسح ونُظهر حالةً واضحة — الانتقالُ الفعليّ فى onPageFinished
+            //   أعلاه (أو مهلة الأمان تحت لو تعطّل onPageFinished لأيّ سبب).
+            //   نُلغي أيّ مهلةَ مسحٍ تلقائيّةٍ معلَّقة من مسحةٍ سابقة كي لا تمسح رسالة التحميل.
+            resultClearRunnable?.let { heartbeatHandler.removeCallbacks(it); resultClearRunnable = null }
+            _siteRevealed = false
+            txtItemName.text = ""
+            showTopResult(L("⏳ جارٍ تحميل الموقع…", "⏳ Loading the site…"), "#CC0F172A")
+            txtItemDetails.text = ""
+            txtStatusBadge.text = L("انتظر قليلاً…", "Please wait…")
+            setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+
             w.loadUrl("${getServerUrl()}/static/m/jawwal.html")
             siteLoaded = true
             loadedServerAddr = getServerUrl()
+
+            // 🛟 مهلةُ أمانٍ: لو تأخّر تحميلُ الصفحةِ فعلاً (أو لم يُطلَق onPageFinished
+            //   لأيّ سببٍ نادر)، لا نُبقي المستخدمَ عالقاً للأبد على "جارٍ التحميل".
+            _siteRevealFallback?.let { heartbeatHandler.removeCallbacks(it) }
+            val fb = Runnable { if (!_siteRevealed) revealSiteView(w) }
+            _siteRevealFallback = fb
+            heartbeatHandler.postDelayed(fb, 10000)
+            return
         }
+        revealSiteView(w)
+    }
+
+    /** يكشف واجهةَ الموقعِ فعلياً (بعد تأكّد التحميل أو مهلة الأمان) ويُخفي شاشةَ الماسح. */
+    private fun revealSiteView(w: android.webkit.WebView) {
+        if (_siteRevealed) return
+        _siteRevealed = true
+        _siteRevealFallback?.let { heartbeatHandler.removeCallbacks(it); _siteRevealFallback = null }
         w.visibility = View.VISIBLE
         w.bringToFront()
         // نحن الآن داخل الموقع: أخفِ عناصرَ الماسحِ كلَّها — لا سيّما العمودَ العلويَّ المرفوعَ بـ elevation
@@ -858,6 +911,12 @@ class MainActivity : AppCompatActivity() {
     private fun closeSite() {
         val w = web ?: return
         if (scanForSite) stopSiteScan()   // احتياطاً: أوقفْ وضعَ مسح الموقع إن كان مفعّلاً
+        // 🐞 v1.22 — لازمٌ نُصفّر _siteRevealed هنا: هى فقط تمنعُ الكشفَ المزدوجَ *أثناء*
+        //   فتحةٍ واحدة (onPageFinished قد يتبعه إطلاقُ مهلةِ الأمان لولا هذا الحارس) —
+        //   لا يجب أن تمنع الكشفَ فى المرّة القادمة (الموقعُ محمَّلٌ مسبقاً siteLoaded=true
+        //   فتذهب showSiteView مباشرةً إلى revealSiteView التي كانت سترفضُ الكشفَ لولا
+        //   هذا التصفير — عطلٌ كان سيُخفي الموقعَ للأبد بعد أوّل إغلاق).
+        _siteRevealed = false
         w.visibility = View.GONE
         // عُدنا للماسح: أرجِع عناصرَه (فقط الجديدةَ — لا الأيقوناتِ القديمةَ المُستبدَلةَ بالقائمة)
         findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
@@ -1021,6 +1080,20 @@ class MainActivity : AppCompatActivity() {
         txtItemDetails.text = ""
         txtStatusBadge.text = L("جاهز للمسح", "Ready to scan")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+    }
+
+    /** 🐞 v1.22 — نتيجةُ المسحِ (اسمُ الصنف/السعر/رسالةُ الرفض) كانت تبقى ظاهرةً على
+     *  الشاشةِ للأبد حتى المسحةِ التالية — لو تأخّر الكاشيرُ فى المسحةِ التالية، تفضلُ
+     *  الشاشةُ عالقةً على صنفٍ قديم (بلاغ المستخدم: نفسُ الصورة/النتيجة إلى ما لا نهاية).
+     *  الآن: بعد مهلةٍ قصيرةٍ (٤ ثوانٍ) من عرض أيّ نتيجةٍ نهائيّة، تُمسح تلقائياً وتعودُ
+     *  الشاشةُ لحالةِ الانتظار — إلا لو وصلت مسحةٌ جديدةٌ قبلها (عندها تُلغى المهلةُ
+     *  القديمةُ فوراً فى بداية onBarcodeDetected، وتُستبدَل بمهلةٍ جديدةٍ لنتيجةِ
+     *  المسحةِ الجديدة عند عرضها). */
+    private fun scheduleAutoClear(delayMs: Long = 4000) {
+        resultClearRunnable?.let { heartbeatHandler.removeCallbacks(it) }
+        val r = Runnable { clearDisplay() }
+        resultClearRunnable = r
+        heartbeatHandler.postDelayed(r, delayMs)
     }
 
     // ★ لغةُ البرنامج: يعيدُ النصَّ العربيَّ أو الإنجليزيَّ حسبَ اختيارِ المستخدم (الافتراضي عربي).
@@ -1378,6 +1451,73 @@ class MainActivity : AppCompatActivity() {
         }
         clearDeviceToken()
         runOnUiThread { toastMsg(L("تمّ إلغاء البصمة على هذا الجهاز", "Fingerprint login deactivated on this device")) }
+    }
+
+    /** 🆕 v1.21 — تسجيل دخول **شاشة الموقع نفسِها هنا على الجوّال** بالبصمة، بلا كتابة
+     *  يوزر/باسورد — يختلف عن `handleLoginQR` (الذي يؤكّد جلسةَ كمبيوترٍ *آخر*): هذا
+     *  يسجّل دخول جلسةِ الـWebView الحاليّة مباشرةً. يتطلّب device_token محليّاً
+     *  (من تفعيلٍ سابق) — الموقعُ يستدعيه فقط لو `hasBiometricDevice()` صحيحة. */
+    private fun bridgeLoginWithBiometric() {
+        val token = getDeviceToken()
+        if (token.isNullOrBlank()) {
+            web?.evaluateJavascript(
+                "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'no_device')", null)
+            return
+        }
+        requireBiometric(L("تسجيل الدخول بالبصمة", "Log in with fingerprint"), onFail = {
+            web?.evaluateJavascript(
+                "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'biometric_failed')", null)
+        }) {
+            _deviceLoginRequest(token)
+        }
+    }
+
+    /** الطلبُ الفعليُّ لتسجيل الدخول بـdevice_token بعد نجاح البصمة محليّاً.
+     *  🍪 الجلسة (Flask session cookie) تصل هنا عبر OkHttp لا عبر الـWebView — يجب
+     *  زرعها يدويّاً فى CookieManager كى تحملها طلبات الـWebView (fetch/XHR) القادمة. */
+    private fun _deviceLoginRequest(token: String) {
+        val body = JSONObject().apply { put("device_token", token) }
+            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder().url("${getServerUrl()}/api/auth/device-login").post(body).build()
+        httpClient.newCall(req).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    web?.evaluateJavascript(
+                        "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'network')", null)
+                }
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val bodyStr = response.body?.string() ?: "{}"
+                val json = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
+                val ok = json.optBoolean("success", false)
+                if (ok && response.isSuccessful) {
+                    try {
+                        val cookies = response.headers("Set-Cookie")
+                        val cm = android.webkit.CookieManager.getInstance()
+                        val srvUrl = getServerUrl()
+                        for (c in cookies) cm.setCookie(srvUrl, c)
+                        cm.flush()
+                    } catch (e: Exception) { /* لو فشل زرع الكوكيز، الصفحةُ ستُظهر خطأ دخولٍ طبيعياً */ }
+                    val uObj = json.optJSONObject("user")
+                    val uname = (uObj?.optString("username", "") ?: "")
+                        .replace("\\", "\\\\").replace("'", "\\'")
+                    val fullName = (uObj?.optString("full_name", "") ?: "")
+                        .replace("\\", "\\\\").replace("'", "\\'")
+                    runOnUiThread {
+                        playToneSuccess(); vibrateSuccess()
+                        web?.evaluateJavascript(
+                            "window.onBiometricLoginResult && window.onBiometricLoginResult(true,'$uname','$fullName')", null)
+                    }
+                } else {
+                    val err = (json.optString("error", "")).replace("\\", "\\\\").replace("'", "\\'")
+                    runOnUiThread {
+                        playToneError(); vibrateError()
+                        web?.evaluateJavascript(
+                            "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'server','$err')", null)
+                    }
+                }
+            }
+        })
     }
 
     /** رمز QR دخولٍ (من شاشة الكمبيوتر): awael://login?token=... — يُطلب بصمةً محليّةً
@@ -1749,6 +1889,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onBarcodeDetected(code: String) {
+        // 🐞 v1.22 — مسحةٌ جديدةٌ وصلت: ألغِ أيّ مهلةَ مسحٍ تلقائيٍّ معلَّقة من نتيجةِ
+        //   المسحةِ السابقة، فورًا (قبل أيّ فرع)، كي لا تُمسَح نتيجةُ هذه المسحةِ الجديدة
+        //   وسط انتظار الردّ من الخادم.
+        resultClearRunnable?.let { heartbeatHandler.removeCallbacks(it); resultClearRunnable = null }
         // 🔗 رمزُ ربطٍ (QR من شاشة /link في الكمبيوتر)؟ عالِجه كإعداداتٍ لا كباركودِ صنف.
         if (code.startsWith("awael://link")) {
             handleLinkQR(code)
@@ -1796,6 +1940,7 @@ class MainActivity : AppCompatActivity() {
                 txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                 txtStatusBadge.text = L("❌ افتح القائمة ← إعادة الربط، وامسح QR من الكمبيوتر", "❌ Open menu → Re-link, scan QR from the computer")
                 setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                scheduleAutoClear()
             }
             return
         }
@@ -1823,6 +1968,7 @@ class MainActivity : AppCompatActivity() {
                     txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                     txtStatusBadge.text = L("❌ لم يُرسَل — انقطاع الاتصال بالخادم", "❌ Not sent — no connection to server")
                     setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                    scheduleAutoClear()
                 }
             }
             override fun onResponse(call: Call, response: Response) {
@@ -1844,6 +1990,7 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = "❌ $errMsg"
                             setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                            scheduleAutoClear()
                         }
                         return
                     }
@@ -1864,6 +2011,7 @@ class MainActivity : AppCompatActivity() {
                                 else L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("✅ تم الإرسال والإضافة للفاتورة", "✅ Sent & added to invoice")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                            scheduleAutoClear()
                         } else {
                             // 🐞 v10.510 — كان هنا فرعٌ ثالثٌ ميت («تم النقل بنجاح») لا يُصَل إليه أبداً
                             //   الآن بعد أن صار isFound المفتاحَ الوحيدَ هنا (الاستجابةُ ناجحةٌ مضمونةً
@@ -1876,6 +2024,7 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("لا يوجد صنف بهذا الباركود في النظام", "No item with this barcode")
                             setBadgeStyle("#78350F", "#F59E0B", "#D97706")
+                            scheduleAutoClear()
                         }
                     }
                 } catch (e: Exception) {
@@ -1891,6 +2040,7 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("✅ تم الاستلام بنجاح", "✅ Received")
                             setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
+                            scheduleAutoClear()
                         }
                     } else {
                         // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسح
@@ -1902,6 +2052,7 @@ class MainActivity : AppCompatActivity() {
                             txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
                             txtStatusBadge.text = L("❌ لم يُرسَل — أعد المسح", "❌ Not sent — scan again") + " (${response.code})"
                             setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
+                            scheduleAutoClear()
                         }
                     }
                 }
