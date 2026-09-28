@@ -140,6 +140,8 @@ class MainActivity : AppCompatActivity() {
     private var homeConn: TextView? = null
     private var homeNote: TextView? = null
     private var homeTiles: LinearLayout? = null
+    private var homeConnBtn: TextView? = null
+    private var discovering = false
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraWanted = false                     // لا كاميرا إلا في الماسح/الجرد/الربط/دخول الكمبيوتر
     // التذكرة (بعد فتح المفتاح بالبصمة) في ذاكرة العمليّة فقط — تبقى عبر recreate (تغيير اللغة/الخط/الخروج من الجرد)
@@ -831,6 +833,29 @@ class MainActivity : AppCompatActivity() {
 
             // 📎 v1.8 — مُنتقي الملفّات: بدونه لا يفتحُ زرُّ «إضافة مرفق» شيئاً.
             w.webChromeClient = object : android.webkit.WebChromeClient() {
+                // 📱 v1.24 — تأكيدات الصفحة (مثل «هل تريد تسجيل الخروج؟») بنافذة التطبيق وعنوانه، لا بنافذة
+                //   أندرويد التي تكتب «الصفحة في 192.168… تقول».
+                override fun onJsAlert(view: android.webkit.WebView?, url: String?, message: String?,
+                                       result: android.webkit.JsResult?): Boolean {
+                    androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle(L("نظام الأوائل", "Al-Awael"))
+                        .setMessage(message ?: "")
+                        .setCancelable(false)
+                        .setPositiveButton(L("حسناً", "OK")) { _, _ -> result?.confirm() }
+                        .show()
+                    return true
+                }
+                override fun onJsConfirm(view: android.webkit.WebView?, url: String?, message: String?,
+                                         result: android.webkit.JsResult?): Boolean {
+                    androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle(L("نظام الأوائل", "Al-Awael"))
+                        .setMessage(message ?: "")
+                        .setCancelable(false)
+                        .setPositiveButton(L("نعم", "Yes")) { _, _ -> result?.confirm() }
+                        .setNegativeButton(L("لا", "No")) { _, _ -> result?.cancel() }
+                        .show()
+                    return true
+                }
                 override fun onShowFileChooser(
                     view: android.webkit.WebView?,
                     cb: android.webkit.ValueCallback<Array<android.net.Uri>>?,
@@ -1694,7 +1719,17 @@ class MainActivity : AppCompatActivity() {
         val conn = TextView(this)
         conn.textSize = 12f
         homeConn = conn
-        connRow.addView(dot); connRow.addView(conn)
+        // 📱 v1.24 — زرّ «اتصال» صغير يظهر فقط وهو غير متصل: يبحث عن البرنامج على الشبكة الحاليّة ويتصل
+        val connBtn = TextView(this)
+        connBtn.text = L("🔄 اتصال", "🔄 Connect")
+        connBtn.textSize = 12f
+        connBtn.setTextColor(Color.WHITE)
+        connBtn.setPadding(dp(12), dp(4), dp(12), dp(4))
+        connBtn.background = roundBg("#0369A1", dp(12).toFloat())
+        connBtn.layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) }
+        connBtn.setOnClickListener { discoverServer() }
+        homeConnBtn = connBtn
+        connRow.addView(dot); connRow.addView(conn); connRow.addView(connBtn)
         val note = TextView(this)
         note.textSize = 13f
         note.setPadding(0, dp(8), 0, 0)
@@ -1719,7 +1754,7 @@ class MainActivity : AppCompatActivity() {
         foot.gravity = android.view.Gravity.CENTER
         foot.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) }
         fun small(label: String, onClick: () -> Unit): Button = Button(this).apply {
-            text = label; textSize = 13f; isAllCaps = false
+            text = label; textSize = 12f; isAllCaps = false
             setTextColor(Color.parseColor("#CBD5E1"))
             background = roundBg("#1E293B", dp(12).toFloat())
             layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(6), 0, dp(6), 0) }
@@ -1727,6 +1762,7 @@ class MainActivity : AppCompatActivity() {
         }
         foot.addView(small(L("⚙️ الإعدادات", "⚙️ Settings")) { openSettings() })
         foot.addView(small(L("ℹ️ عن التطبيق", "ℹ️ About")) { showAbout() })
+        foot.addView(small(L("🔒 قفل وخروج", "🔒 Lock & exit")) { lockAndExit() })
         col.addView(foot)
 
         scroll.addView(col)
@@ -1736,15 +1772,109 @@ class MainActivity : AppCompatActivity() {
         renderHome()
     }
 
+    /** 📱 v1.24 — «قفل وخروج» (بديل «الإيقاف الإجباريّ» من إعدادات أندرويد): يمسح الجلسة والتذكرة،
+     *  ويغلق التطبيق كلّه — فأوّل فتحٍ بعده يطلب البصمة من جديد ويبدأ نظيفاً. الربط نفسه لا يتأثّر. */
+    private fun lockAndExit() {
+        mdTicket = null
+        mdTicketExp = 0L
+        try { stopCamera() } catch (e: Exception) {}
+        try {
+            val cm = android.webkit.CookieManager.getInstance()
+            cm.removeAllCookies(null)
+            cm.flush()
+        } catch (e: Exception) {}
+        try { web?.clearCache(false) } catch (e: Exception) {}
+        finishAndRemoveTask()
+        heartbeatHandler.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, 400)
+    }
+
     private fun updateHomeConnection() {
         val dot = homeDot ?: return
         dot.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(Color.parseColor(if (isServerConnected) "#22C55E" else "#EF4444"))
         }
-        homeConn?.text = if (isServerConnected) L("متصل بالنظام", "Connected") else L("غير متصل بالخادم", "Not connected")
-        homeConn?.setTextColor(Color.parseColor(if (isServerConnected) "#4ADE80" else "#F87171"))
+        homeConn?.text = when {
+            isServerConnected -> L("متصل بالنظام", "Connected")
+            discovering -> L("جارٍ البحث عن البرنامج…", "Searching for the program…")
+            else -> L("غير متصل بالخادم", "Not connected")
+        }
+        homeConn?.setTextColor(Color.parseColor(if (isServerConnected) "#4ADE80" else if (discovering) "#FBBF24" else "#F87171"))
+        homeConnBtn?.visibility = if (isServerConnected || discovering) View.GONE else View.VISIBLE
     }
+
+    /** 📱 v1.24 — «اتصال»: بعد تغيير الشبكة يتغيّر عنوان الكمبيوتر. نبحث في الشبكة الحاليّة عن برنامج الأوائل
+     *  الذي رُبط عليه هذا الجوال (بصمة مفتاحه) ونحفظ عنوانه الجديد — بلا كتابة عنوانٍ ولا مسح رمز. */
+    private fun discoverServer() {
+        if (discovering) return
+        discovering = true
+        updateHomeConnection()
+        val did = deviceIdStr()
+        val tag = prefs.getString("md_key_tag", "") ?: ""
+        val port = (prefs.getString("server_port", "5005") ?: "5005").trim().ifBlank { "5005" }
+        val oldIp = (prefs.getString("server_ip", "") ?: "").trim()
+        Thread {
+            val candidates = LinkedHashSet<String>()
+            if (oldIp.isNotBlank()) candidates.add(oldIp)
+            try {
+                val ifs = java.net.NetworkInterface.getNetworkInterfaces()
+                while (ifs != null && ifs.hasMoreElements()) {
+                    val ni = ifs.nextElement()
+                    if (!ni.isUp || ni.isLoopback) continue
+                    val addrs = ni.inetAddresses
+                    while (addrs.hasMoreElements()) {
+                        val a = addrs.nextElement()
+                        if (a is java.net.Inet4Address && a.isSiteLocalAddress) {
+                            val me = a.hostAddress ?: continue
+                            val prefix = me.substring(0, me.lastIndexOf('.') + 1)
+                            for (i in 1..254) { val ip = prefix + i; if (ip != me) candidates.add(ip) }
+                        }
+                    }
+                }
+            } catch (e: Exception) {}
+            val found = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val quick = httpClient.newBuilder().connectTimeout(700, TimeUnit.MILLISECONDS)
+                .readTimeout(1500, TimeUnit.MILLISECONDS).build()
+            val pool = Executors.newFixedThreadPool(48)
+            for (ip in candidates) {
+                pool.submit {
+                    if (found.get() == null) {
+                        try {
+                            val req = Request.Builder().url("http://$ip:$port/api/mobile/hello?device_id=$did").get().build()
+                            quick.newCall(req).execute().use { r ->
+                                val j = JSONObject(r.body?.string() ?: "{}")
+                                val kt = j.optString("key_tag", "")
+                                val ours = j.optString("app") == "awael" &&
+                                    (did.isBlank() || (kt.isNotBlank() && (tag.isBlank() || kt == tag)))
+                                if (ours) found.compareAndSet(null, ip)
+                            }
+                        } catch (e: Exception) {}
+                    }
+                }
+            }
+            pool.shutdown()
+            try { pool.awaitTermination(25, TimeUnit.SECONDS) } catch (e: Exception) {}
+            val ip = found.get()
+            runOnUiThread {
+                discovering = false
+                if (ip != null) {
+                    prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
+                    reloadSiteIfAddressChanged()
+                    edtServerIp.setText(ip); edtServerPort.setText(port)
+                    updateConnectionUi(true)
+                    playToneSuccess(); vibrateSuccess()
+                    toastMsg(L("✅ تمّ الاتصال بالبرنامج على هذه الشبكة", "✅ Connected to the program on this network"))
+                    fetchStatus(true)
+                } else {
+                    updateHomeConnection()
+                    playToneWarning()
+                    toastMsg(L("لم يُعثر على البرنامج على هذه الشبكة — تأكّد أن الكمبيوتر يعمل والبرنامج مفتوح وأنّ الجوال على نفس الواي فاي",
+                               "The program wasn't found on this network — make sure the computer is on, the program is open and the phone is on the same Wi-Fi"))
+                }
+            }
+        }.start()
+    }
+
 
     private fun renderHome() {
         val tiles = homeTiles ?: return
@@ -1891,7 +2021,8 @@ class MainActivity : AppCompatActivity() {
                     .put("public_key", pub).put("signature", sig).put("device_label", label), null) { c2, j2, _ ->
                     loginFlowBusy = false
                     if (c2 == 200 && j2.optInt("device_id", 0) > 0) {
-                        prefs.edit().putString("md_device_id", j2.optInt("device_id").toString()).apply()
+                        prefs.edit().putString("md_device_id", j2.optInt("device_id").toString())
+                            .putString("md_key_tag", sha256Hex(pub).take(16)).apply()   // لزرّ «اتصال»: يعرف برنامجه
                         applyDeviceInfo(j2)
                         updateConnectionUi(true)
                         playToneSuccess(); vibrateSuccess()
@@ -1911,15 +2042,28 @@ class MainActivity : AppCompatActivity() {
     private fun startMobileSession(ticket: String, retried: Boolean, cb: (Boolean, String, String, String) -> Unit) {
         api("POST", "/api/mobile/session", null, ticket) { code, j, headers ->
             if (code == 200 && j.optBoolean("success", false)) {
+                val u = j.optJSONObject("user")
+                // 📱 v1.24 — ننتظر حتى تُخزَّن الجلسة فعلاً في الـWebView قبل أن نكمل: كان الزرع غير متزامن،
+                //   فأوّل طلبٍ من الصفحة يخرج بلا الجلسة الجديدة ⇒ «تعذّر الجلب — انتهت الجلسة» ثمّ يفتح عاديّاً.
+                var finished = false
+                fun finish() {
+                    if (finished) return
+                    finished = true
+                    try { android.webkit.CookieManager.getInstance().flush() } catch (e: Exception) {}
+                    cb(true, u?.optString("username", "") ?: "", u?.optString("full_name", "") ?: "", "")
+                }
                 try {
                     val cm = android.webkit.CookieManager.getInstance()
                     cm.setAcceptCookie(true)
                     val srv = getServerUrl()
-                    for (c in headers?.values("Set-Cookie") ?: emptyList()) cm.setCookie(srv, c)
-                    cm.flush()
-                } catch (e: Exception) {}
-                val u = j.optJSONObject("user")
-                cb(true, u?.optString("username", "") ?: "", u?.optString("full_name", "") ?: "", "")
+                    val cookies = headers?.values("Set-Cookie") ?: emptyList()
+                    if (cookies.isEmpty()) finish()
+                    else {
+                        var left = cookies.size
+                        for (c in cookies) cm.setCookie(srv, c) { _ -> left--; if (left <= 0) finish() }
+                        heartbeatHandler.postDelayed({ finish() }, 2000)   // احتياط: لو لم يُنادَ الردّ على جهازٍ ما
+                    }
+                } catch (e: Exception) { finish() }
                 return@api
             }
             if (code == -1) { cb(false, "", "", "network"); return@api }
