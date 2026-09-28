@@ -23,8 +23,15 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.KeyProperties
+import java.security.KeyPairGenerator
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.PrivateKey
+import java.security.Signature
+import java.security.spec.ECGenParameterSpec
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import okhttp3.*
@@ -123,6 +130,32 @@ class MainActivity : AppCompatActivity() {
     private var stkListLayout: LinearLayout? = null
     private var stkPendingText: TextView? = null
     private var stkTitleText: TextView? = null
+    // ═══════════ 📱 v1.23 — الربط الواحد بالمفتاح (خطة-ربط-الجوال) + الشاشة الرئيسيّة ═══════════
+    //   الشاشة الحاليّة: home · scanner · enroll (مسح رمز الربط) · pclogin (مسح رمز دخول الكمبيوتر)
+    private var mode = "home"
+    private var homeView: View? = null
+    private var homeName: TextView? = null
+    private var homeCompany: TextView? = null
+    private var homeDot: View? = null
+    private var homeConn: TextView? = null
+    private var homeNote: TextView? = null
+    private var homeTiles: LinearLayout? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var cameraWanted = false                     // لا كاميرا إلا في الماسح/الجرد/الربط/دخول الكمبيوتر
+    // التذكرة (بعد فتح المفتاح بالبصمة) في ذاكرة العمليّة فقط — تبقى عبر recreate (تغيير اللغة/الخط/الخروج من الجرد)
+    //   فلا تُطلب بصمةٌ جديدة لذلك، وتزول بإغلاق التطبيق.
+    private var mdTicket: String?
+        get() = sTicket
+        set(v) { sTicket = v }
+    private var mdTicketExp: Long
+        get() = sTicketExp
+        set(v) { sTicketExp = v }
+    private var unlockBusy = false
+    private var lastStatusFetch = 0L
+    private val apiClient: OkHttpClient by lazy {
+        httpClient.newBuilder().connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS).writeTimeout(10, TimeUnit.SECONDS).build()
+    }
     // ★ لغةُ البرنامجِ تضبطُ اتجاهَ الواجهةِ (RTL عربي / LTR إنجليزي) على كلِّ شيءٍ حتى القوائمِ والحوارات.
     override fun attachBaseContext(base: Context) {
         val lang = base.getSharedPreferences("POS_SCANNER_CONFIG", Context.MODE_PRIVATE)
@@ -149,9 +182,9 @@ class MainActivity : AppCompatActivity() {
         initTts()
         initViews()
         loadSettings()
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
+        buildHome()
+        // 📱 v1.23 — الكاميرا لا تعمل عند الفتح: تبدأ فقط داخل الماسح/الجرد/الربط/دخول الكمبيوتر.
+        if (!allPermissionsGranted()) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
         }
         // 🎙️ v1.12 — إذنُ الميكروفونِ للبحثِ الصوتيِّ داخلَ الموقع. طلبٌ منفصلٌ
@@ -162,7 +195,13 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1002)
         }
         startHeartbeat()
-        restoreActiveStocktake()   // 🧮 استئنافُ جلسةِ الجردِ إن كانت مفتوحةً قبلَ الإغلاق (يعملُ دونَ اتصال)
+        if ((prefs.getString("stk_active_sid", "") ?: "").isNotBlank()) {
+            restoreActiveStocktake()   // 🧮 استئنافُ جلسةِ الجردِ إن كانت مفتوحةً قبلَ الإغلاق (يعملُ دونَ اتصال)
+        } else {
+            showHome()
+            // فتحُ التطبيق = بصمةٌ واحدة تفتح المفتاح ⇒ تذكرةٌ + حالةُ الصلاحيّات (إن كان الجوال مربوطاً)
+            if (isLinked() && mdStatus() != "revoked" && validTicket() == null) window.decorView.post { unlockDevice(L("افتح تطبيق الأوائل", "Unlock Al-Awael")) { } }
+        }
     }
 
     // 🧮 يستأنفُ جلسةَ الجردِ المحفوظةَ محلياً (بعدَ إغلاقِ التطبيقِ أو انقطاعِ الشبكة) — بلا حاجةٍ لإعادةِ الربط.
@@ -194,26 +233,11 @@ class MainActivity : AppCompatActivity() {
         downloadCatalog()
     }
 
-    // يستأنفُ آخرَ جلسةٍ من زرِّ القائمة (بعدَ الخروج) — بلا إعادةِ مسحِ QR.
-    private fun resumeLastStocktake() {
-        if (stkActive) return
-        val lsid = prefs.getString("stk_last_sid", "") ?: ""
-        if (lsid.isBlank()) {
-            Toast.makeText(this, L("لا توجد جلسة جرد سابقة — امسح رمز جلسة من الكمبيوتر.", "No previous stocktake — scan a session QR."), Toast.LENGTH_LONG).show()
-            return
-        }
-        enterStocktakeSession(lsid,
-            prefs.getString("stk_s_code_$lsid", "") ?: "",
-            prefs.getString("stk_s_name_$lsid", "") ?: "",
-            prefs.getString("stk_s_counter_$lsid", "") ?: "",
-            prefs.getInt("stk_s_retain_$lsid", 30), true)
-    }
-
     // بعد منحِ إذنِ الكاميرا أوّلَ مرّة: شغّلِ الكاميرا فوراً (بلا حاجةٍ لإغلاقِ التطبيقِ وفتحِه)
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 1001 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startCamera()
+            if (cameraWanted) startCamera()
         }
     }
     private fun initViews() {
@@ -221,14 +245,11 @@ class MainActivity : AppCompatActivity() {
         dotConnectionStatus = findViewById(R.id.dotConnectionStatus)
         txtConnectionStatus = findViewById(R.id.txtConnectionStatus)
         btnTorch = findViewById(R.id.btnTorch)
-        // 🔄 زرُّ التحديث: يُعيدُ فحصَ الاتصال وحالةَ الاقتران بلا إعادةِ تشغيلِ البرنامج
-        findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener {
-            txtItemName.text = "🔄 جارٍ تحديث الحالة…"
-            txtItemDetails.text = "إعادة فحص الاتصال بالخادم"
-            txtStatusBadge.text = "⏳ تحديث…"
-            setBadgeStyle("#1E293B", "#38BDF8", "#334155")
-            setDotColor("#F59E0B")
-            refreshStatus()
+        // 📱 v1.23 — «تحديث الحالة» صار تلقائيّاً؛ هذا الزرّ داخل الماسح صار «نمط النطق».
+        findViewById<ImageButton>(R.id.btnRefresh).apply {
+            setImageResource(android.R.drawable.ic_lock_silent_mode_off)
+            contentDescription = "نمط النطق"
+            setOnClickListener { chooseSpeakMode() }
         }
         btnSettings = findViewById(R.id.btnSettings)
         layoutPendingQueue = findViewById(R.id.layoutPendingQueue)
@@ -314,19 +335,21 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, L("تم حفظ الإعدادات بنجاح!", "Settings saved!"), Toast.LENGTH_SHORT).show()
             checkServerStatus()
         }
-        // زر: أعد الربط بمسح رمز QR — يقفل اللوحة ويوجّه الكاميرا للرمز (تُلتقط تلقائياً)
-        findViewById<Button>(R.id.btnScanLink).setOnClickListener { startRelink() }
+        // 📱 v1.23 — الربط لم يعد من الإعدادات: يتمّ مرّةً واحدة من الشاشة الرئيسيّة برمزٍ من شاشة المستخدمين.
+        findViewById<View>(R.id.btnScanLink).visibility = View.GONE
+        findViewById<View>(R.id.lblRelinkHint).visibility = View.GONE
+        unifySettingsPanel()
         setDotColor("#EF4444")
         setBadgeStyle("#1E293B", "#38BDF8", "#334155")
 
         // زر الانتقال إلى الموقع
         web = findViewById(R.id.web)
         btnSite = findViewById(R.id.btnSite)
-        btnSite?.setOnClickListener { openSite() }
+        btnSite?.visibility = View.GONE   // الدخول للنظام صار مربّعاً في الشاشة الرئيسيّة
         // جسرٌ بين الموقع (jawwal) والتطبيق
         web?.addJavascriptInterface(object {
             @android.webkit.JavascriptInterface
-            fun backToScanner() { runOnUiThread { closeSite() } }
+            fun backToScanner() { runOnUiThread { closeSite() } }   // يعود للشاشة الرئيسيّة
             // يطلبه زرُّ الباركود في الموقع: يُظهر مستطيلَ الكاميرا فوق الموقع لخانةٍ محدّدة
             @android.webkit.JavascriptInterface
             fun scanToField(fieldId: String) { runOnUiThread { startSiteScan(fieldId) } }
@@ -401,39 +424,29 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            /**
-             * 🔐 v1.12 — تفعيلُ الدخولِ بالبصمةِ من داخلِ التطبيقِ نفسِه.
-             * الموقعُ (وهو مُسجَّلُ الدخولِ فعلاً) يستدعي هذا بعد أن يجلبَ
-             * device_token من الخادمِ (POST /api/auth/qr-devices/activate)،
-             * فنُخزّنه مشفَّراً على الجهاز. لا كلمةَ مرورٍ تُطلَبُ ثانيةً.
-             */
-            @android.webkit.JavascriptInterface
-            fun activateBiometricDevice(token: String) {
-                runOnUiThread { bridgeActivateBiometricDevice(token) }
-            }
-
-            /** يسألُه الموقعُ ليعرفَ: هل البصمةُ مُفعَّلةٌ على هذا الجهازِ أصلاً؟ */
+            /** 📱 v1.23 — هل يستطيع هذا الجوال الدخول للنظام بالبصمة؟ (مربوط + «الدخول للنظام» مفعّلة) */
             @android.webkit.JavascriptInterface
             fun hasBiometricDevice(): Boolean = bridgeHasBiometricDevice()
 
-            /** إلغاءُ تفعيلِ البصمةِ محليّاً (حذفُ رمزِ الجهازِ المخزَّن). */
-            @android.webkit.JavascriptInterface
-            fun deactivateBiometricDevice() {
-                runOnUiThread { bridgeDeactivateBiometricDevice() }
-            }
-
-            /** 🆕 v1.21 — تسجيلُ دخول شاشةِ الموقعِ نفسِها (هنا على الجوّال) بالبصمة، بلا
-             *  كتابة يوزر/باسورد. الموقعُ يستدعيه فقط لو hasBiometricDevice() صحيحة، ثم
-             *  ينتظر النتيجة عبر window.onBiometricLoginResult(ok, ...). */
+            /** زرّ «الدخول بالبصمة» في شاشة الدخول: بصمة ⇒ جلسة المستخدم الأساسيّ.
+             *  النتيجة عبر window.onBiometricLoginResult(ok, ...) — نفس العقد القديم. */
             @android.webkit.JavascriptInterface
             fun loginWithBiometric() {
                 runOnUiThread { bridgeLoginWithBiometric() }
             }
+
+            /** انتهت الجلسة (401) أثناء العمل: أعد الدخول وحدك ثم نادِ window.onAwaelReauth(ok). */
+            @android.webkit.JavascriptInterface
+            fun reauth() {
+                runOnUiThread { bridgeReauth() }
+            }
         }, "AndroidApp")
-        // ★ زرُّ القائمة (☰) — كلُّ الأوامرِ في مكانٍ واحد
+        // 📱 v1.23 — لا قائمة (☰): هذا الزرّ داخل الماسح صار «الرئيسيّة».
         findViewById<Button>(R.id.btnMenu).apply {
             background = roundBg("#99000000", 26f)
-            setOnClickListener { showMainMenu(this) }
+            text = "🏠"
+            contentDescription = L("الرئيسيّة", "Home")
+            setOnClickListener { showHome() }
         }
         // ★ طبّقْ لغةَ الواجهةِ بعدَ ربطِ كلِّ العناصر
         applyLanguage()
@@ -444,6 +457,7 @@ class MainActivity : AppCompatActivity() {
         scanForSite = true
         scanSiteField = fieldId
         lastScannedCode = null; lastScanTime = 0L; isFrameClear = true
+        startCamera()
         // الكاميرا ملءُ الشاشة أوّلاً، ثمّ الطبقةُ الشفّافةُ (الإطار+الأزرار) فوقها لتظهرَ الأزرار
         previewView.visibility = View.VISIBLE
         previewView.bringToFront()
@@ -455,6 +469,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopSiteScan() {
         scanForSite = false; scanSiteField = ""
         overlayScan?.visibility = View.GONE
+        stopCamera()
         web?.bringToFront()
     }
 
@@ -897,6 +912,9 @@ class MainActivity : AppCompatActivity() {
         if (_siteRevealed) return
         _siteRevealed = true
         _siteRevealFallback?.let { heartbeatHandler.removeCallbacks(it); _siteRevealFallback = null }
+        homeView?.visibility = View.GONE
+        stopCamera()
+        mode = "site"
         w.visibility = View.VISIBLE
         w.bringToFront()
         // نحن الآن داخل الموقع: أخفِ عناصرَ الماسحِ كلَّها — لا سيّما العمودَ العلويَّ المرفوعَ بـ elevation
@@ -918,20 +936,7 @@ class MainActivity : AppCompatActivity() {
         //   هذا التصفير — عطلٌ كان سيُخفي الموقعَ للأبد بعد أوّل إغلاق).
         _siteRevealed = false
         w.visibility = View.GONE
-        // عُدنا للماسح: أرجِع عناصرَه (فقط الجديدةَ — لا الأيقوناتِ القديمةَ المُستبدَلةَ بالقائمة)
-        findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
-        bottomBar.visibility = View.VISIBLE
-        btnSite?.visibility = View.VISIBLE
-        findViewById<View>(R.id.btnMenu).visibility = View.VISIBLE   // ★ يرجعُ زرُّ القائمة
-        // إصلاحُ الطبقات: نُعيدُ ترتيبَ العناصرِ الثابتةِ للأمامِ لتظهرَ فوراً بلا إغلاقِ التطبيقِ وفتحِه.
-        previewView.bringToFront()                       // الكاميرا خلفية
-        (findViewById<View>(R.id.scanBox))?.bringToFront() // المستطيلُ الأخضرُ الثابت
-        findViewById<View>(R.id.headerStack).bringToFront() // العمودُ العلوي
-        bottomBar.bringToFront()                          // شريطُ البياناتِ السفلي
-        btnSite?.bringToFront()
-        findViewById<View>(R.id.btnMenu).bringToFront()
-        val root = w.parent as? android.view.ViewGroup
-        root?.requestLayout(); root?.invalidate()          // إجبارُ إعادةِ الرسمِ فوراً
+        showHome()   // 📱 v1.23 — العودة من الموقع إلى الشاشة الرئيسيّة (لا إلى الكاميرا)
     }
 
     private fun loadSettings() {
@@ -1129,49 +1134,6 @@ class MainActivity : AppCompatActivity() {
         txtScanCount?.text = L("المسحات: ", "Scans: ") + scanCount
     }
 
-    // ★ القائمة (☰): قائمةٌ نظيفةٌ موحّدةُ الاتجاهِ مثلَ تطبيقاتِ الجوال — تشملُ لغةَ الصوتِ ولغةَ البرنامج.
-    private fun showMainMenu(anchor: View) {
-        val items = arrayOf(
-            L("🧮 جلسة الجرد", "🧮 Stocktake session"),
-            L("💡 الكشّاف", "💡 Torch"),
-            L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael"),
-            L("🌐 اللغة والصوت", "🌐 Language & voice"),
-            L("🗣️ نمط النطق", "🗣️ Speech mode"),
-            L("🔠 حجم الخط", "🔠 Font size"),
-            L("🔄 تحديث الحالة", "🔄 Refresh status"),
-            L("🔢 تصفير العدّاد", "🔢 Reset counter"),
-            L("ℹ️ عن التطبيق", "ℹ️ About")
-        )
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle(L("القائمة", "Menu"))
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> resumeLastStocktake()
-                    1 -> toggleTorch()
-                    2 -> openLinkPanel()
-                    3 -> openLangPanel()
-                    4 -> chooseSpeakMode()
-                    5 -> openFontDialog()
-                    6 -> refreshStatus()
-                    7 -> confirmResetCounter()
-                    8 -> showAbout()
-                }
-            }
-            .show()
-    }
-
-    // ★ يفتحُ الإعداداتِ على قسمٍ واحدٍ فقط (الربط أو اللغة) — شاشةٌ منبثقةٌ نظيفةٌ لكلِّ غرض.
-    private fun openLinkPanel() { showSettingsSection(true) }
-    private fun openLangPanel() { showSettingsSection(false) }
-    private fun showSettingsSection(conn: Boolean) {
-        findViewById<View>(R.id.secConn).visibility = if (conn) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.secLang).visibility = if (conn) View.GONE else View.VISIBLE
-        findViewById<TextView>(R.id.lblSettingsTitle).text =
-            if (conn) L("🔌 الربط بنظام الأوائل", "🔌 Link to Al-Awael")
-            else L("🌐 اللغة والصوت", "🌐 Language & voice")
-        openSettings()
-    }
-
     // ★ حجمُ الخط: زرّا − و + يغيّران النسبةَ المئويّة، ثمّ تطبيقٌ يُعيدُ البناء.
     private fun openFontDialog() {
         var pct = (prefs.getFloat("font_scale", 1.0f) * 100).toInt()
@@ -1201,27 +1163,33 @@ class MainActivity : AppCompatActivity() {
 
     // ★ فتحُ/إغلاقُ الإعدادات: نخفي عمودَ الماسحِ والشريطَ السفليَّ حتى لا يطفوا فوقَ الإعدادات (elevation).
     private fun openSettings() {
-        findViewById<View>(R.id.headerStack).visibility = View.GONE
-        bottomBar.visibility = View.GONE
-        findViewById<View>(R.id.btnMenu).visibility = View.GONE
+        setScannerViews(false)
+        homeView?.visibility = View.GONE
         layoutSettings.visibility = View.VISIBLE
         layoutSettings.bringToFront()
         txtTestResult.visibility = View.GONE
     }
     private fun closeSettings() {
         layoutSettings.visibility = View.GONE
-        findViewById<View>(R.id.headerStack).visibility = View.VISIBLE
-        bottomBar.visibility = View.VISIBLE
-        findViewById<View>(R.id.btnMenu).visibility = View.VISIBLE
+        showHome()
     }
 
-    // ★ إعادةُ الربطِ بمسحِ QR (نفسُ زرِّ "مسح رمز الربط" داخلَ الإعدادات).
-    private fun startRelink() {
-        closeSettings()
-        txtResultTop.text = L("📷 وجّه الكاميرا لرمز الربط", "📷 Aim the camera at the link QR")
-        txtStatusBadge.text = L("بانتظار رمز الربط…", "Waiting for link QR…")
-        setBadgeStyle("#1E293B", "#38BDF8", "#334155")
-        Toast.makeText(this, L("وجّه الكاميرا نحو رمز الربط", "Aim at the link QR"), Toast.LENGTH_LONG).show()
+    /** 📱 v1.23 — شاشة إعداداتٍ واحدة داكنة: الصوت (تشغيل/نمط/لغة/مستوى) · لغة التطبيق · حجم الخط · الاتصال اليدويّ. */
+    private fun unifySettingsPanel() {
+        val secConn = findViewById<View>(R.id.secConn)
+        val secLang = findViewById<LinearLayout>(R.id.secLang)
+        secConn.visibility = View.VISIBLE
+        secLang.visibility = View.VISIBLE
+        // الاتصال اليدويّ في آخر الشاشة (نادر الاستعمال — الربط يضبط العنوان وحده)
+        (secConn.parent as? android.view.ViewGroup)?.let { p -> p.removeView(secConn); p.addView(secConn) }
+        fun extraBtn(label: String, onClick: () -> Unit): Button = Button(this).apply {
+            text = label; setTextColor(Color.WHITE); isAllCaps = false
+            background = roundBg("#334155", 12f)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+            setOnClickListener { onClick() }
+        }
+        secLang.addView(extraBtn(L("🗣️ نمط النطق (كامل / الكلمة الأولى / صفير)", "🗣️ Speech mode")) { chooseSpeakMode() })
+        secLang.addView(extraBtn(L("🔠 حجم الخط", "🔠 Font size")) { openFontDialog() })
     }
 
     // ★ عن التطبيق: الاسمُ والإصدارُ الحقيقيُّ (يُقرأُ من رقمِ البناءِ لا ثابتاً — فلا يخدعُ المستخدم).
@@ -1234,8 +1202,12 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { "?" }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(L("عن التطبيق", "About"))
-            .setMessage(L("ماسح باركود الأوائل\nالإصدار: $v", "Al-Awael Barcode Scanner\nVersion: $v"))
+            .setMessage(L("تطبيق الأوائل للجوال\nالإصدار: $v", "Al-Awael Mobile\nVersion: $v") +
+                (if (isLinked()) "\n\n" + L("مربوط باسم: ", "Linked to: ") + (prefs.getString("md_full_name", "") ?: "") +
+                    "\n" + L("رقم الجوال في النظام: #", "Device #") + deviceIdStr() else ""))
             .setPositiveButton(L("حسناً", "OK"), null)
+            // إعادة الربط (نادرة): الإدارة تنشئ رمزاً جديداً من شاشة المستخدمين ← أجهزة الجوال
+            .setNeutralButton(L("ربط من جديد", "Re-link")) { _, _ -> startEnroll() }
             .show()
     }
 
@@ -1338,285 +1310,761 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 🆕 v1.12 — تسجيل الدخول بالبصمة (QR + رمز جهاز)
+    // 📱 v1.23 — الربط الواحد بالمفتاح (خطة-ربط-الجوال.md)
     //
-    //   رمزُ الجهازِ (256-bit، صادرٌ من السيرفر بعد أوّل تفعيلٍ) يُخزَّنُ هنا
-    //   مشفَّراً بمفتاح Android Keystore (EncryptedSharedPreferences) — لا يُقرأ
-    //   بلا فتح الجهاز نفسه. البصمةُ لا تصل للسيرفر إطلاقاً؛ هى حارسٌ محليٌّ
-    //   فقط يحمي *استخدامَ* هذا الرمز فى لحظتين: فتح الموقع داخل التطبيق،
-    //   وتأكيد تسجيل دخول كمبيوترٍ آخر (QR).
+    //   • الربط مرّةً واحدة: الإدارة تعرض رمزاً لمرّةٍ واحدة (دقيقتان) من شاشة المستخدمين ← أجهزة الجوال.
+    //   • الجوال يولّد زوج مفاتيح داخل شريحة الأمان (Android Keystore)؛ الخاصّ لا يخرج أبداً،
+    //     ومقفولٌ بالبصمة نفسها (كلّ توقيعٍ يحتاج بصمة) — لا بوّابةٌ شكليّة ولا رمزٌ يمرّ على الشبكة.
+    //   • كلّ استخدام: الخادم يعطي «سؤالاً» جديداً ← البصمة توقّعه ← الخادم يتحقّق ويعطي تذكرةً قصيرة.
+    //   • أربع صلاحيّات يتحكّم بها المالك/الأدمن: الدخول للنظام · قارئ الباركود · الجرد · الدخول للكمبيوتر.
     // ═══════════════════════════════════════════════════════════════
-    private fun securePrefs(): SharedPreferences {
-        val masterKey = MasterKey.Builder(this)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        return EncryptedSharedPreferences.create(
-            this, "POS_SCANNER_SECURE", masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+    private val KEY_ALIAS = "awael_device_key_v1"
+
+    private fun isLinked(): Boolean = deviceIdStr().isNotBlank()
+    private fun deviceIdStr(): String = prefs.getString("md_device_id", "") ?: ""
+    private fun mdStatus(): String = prefs.getString("md_status", "") ?: ""
+
+    private fun validTicket(): String? {
+        val t = mdTicket ?: return null
+        return if (System.currentTimeMillis() < mdTicketExp) t else { mdTicket = null; null }
     }
 
-    private fun getDeviceToken(): String? =
-        try { securePrefs().getString("device_token", null) } catch (e: Exception) { null }
+    private fun sha256Hex(s: String): String =
+        MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
-    private fun saveDeviceToken(token: String) {
-        try { securePrefs().edit().putString("device_token", token).apply() } catch (e: Exception) {}
-    }
-
-    private fun clearDeviceToken() {
-        try { securePrefs().edit().remove("device_token").apply() } catch (e: Exception) {}
-    }
+    private fun jsq(s: String): String =
+        s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ")
 
     private fun biometricAvailable(): Boolean {
-        val bm = androidx.biometric.BiometricManager.from(this)
+        val bm = BiometricManager.from(this)
         return bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
             BiometricManager.BIOMETRIC_SUCCESS
     }
 
-    /** يعرض حوار البصمة القياسي لأندرويد، وينفّذ [onSuccess] فقط بعد نجاحٍ حقيقيّ. */
-    private fun requireBiometric(reason: String, onFail: (() -> Unit)? = null, onSuccess: () -> Unit) {
-        if (!biometricAvailable()) {
-            // لا بصمة مسجَّلة على الجهاز — لا نمنع الاستخدام، فقط لا حماية إضافية هنا.
-            onSuccess(); return
+    /** يولّد مفتاح هذا الجوال داخل شريحة الأمان (يُستبدل أيّ مفتاحٍ سابق) ويعيد العامّ (X.509، base64). */
+    private fun generateDeviceKey(): String {
+        val ks = KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        if (ks.containsAlias(KEY_ALIAS)) ks.deleteEntry(KEY_ALIAS)
+        val b = KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setUserAuthenticationRequired(true)
+        if (Build.VERSION.SDK_INT >= 30) {
+            b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)   // بصمةٌ لكلّ توقيع
+        } else {
+            @Suppress("DEPRECATION") b.setUserAuthenticationValidityDurationSeconds(-1)   // -1 = بصمةٌ لكلّ توقيع
         }
-        val executor = ContextCompat.getMainExecutor(this)
-        val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                onSuccess()
-            }
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
-                    errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
-                    toastMsg(L("تعذّرت البصمة: $errString", "Fingerprint failed: $errString"))
+        // إضافة بصمةٍ جديدة على الجوال تُبطل المفتاح (لا يدخل بها أحدٌ أضاف إصبعه لاحقاً)
+        if (Build.VERSION.SDK_INT >= 24) b.setInvalidatedByBiometricEnrollment(true)
+        val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
+        kpg.initialize(b.build())
+        val kp = kpg.generateKeyPair()
+        return android.util.Base64.encodeToString(kp.public.encoded, android.util.Base64.NO_WRAP)
+    }
+
+    /** يطلب البصمة ويوقّع [message] بمفتاح الجوال. done(sig, err): sig=null&err=null ⇒ ألغى المستخدم. */
+    private fun signWithBiometric(message: String, reason: String, done: (String?, String?) -> Unit) {
+        val sig: Signature
+        try {
+            val ks = KeyStore.getInstance("AndroidKeyStore")
+            ks.load(null)
+            val pk = ks.getKey(KEY_ALIAS, null) as? PrivateKey
+            if (pk == null) { done(null, "no_key"); return }
+            sig = Signature.getInstance("SHA256withECDSA")
+            sig.initSign(pk)
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            done(null, "key_invalidated"); return
+        } catch (e: Exception) {
+            done(null, "key_error: " + (e.message ?: "")); return
+        }
+        val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    try {
+                        val s = result.cryptoObject?.signature ?: sig
+                        s.update(message.toByteArray(Charsets.UTF_8))
+                        done(android.util.Base64.encodeToString(s.sign(), android.util.Base64.NO_WRAP), null)
+                    } catch (e: Exception) {
+                        done(null, "sign_error: " + (e.message ?: ""))
+                    }
                 }
-                onFail?.invoke()
-            }
-        })
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        errorCode == BiometricPrompt.ERROR_CANCELED) done(null, null)
+                    else done(null, "bio: $errString")
+                }
+            })
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(L("تأكيد الهويّة", "Confirm identity"))
+            .setTitle(L("تأكيد بالبصمة", "Confirm with fingerprint"))
             .setSubtitle(reason)
             .setNegativeButtonText(L("إلغاء", "Cancel"))
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
-        prompt.authenticate(info)
+        try {
+            prompt.authenticate(info, BiometricPrompt.CryptoObject(sig))
+        } catch (e: Exception) {
+            done(null, "bio: " + (e.message ?: ""))
+        }
     }
 
-    /** يستدعيه الموقعُ (jawwal) بعد أن يُصدر السيرفر رمز جهازٍ جديداً (تفعيلٌ أوّل مرّة،
-     *  والمستخدمُ مسجَّلٌ دخوله بالفعل داخل الـWebView — لا حاجة لكلمة مرورٍ هنا).
-     *
-     *  🐞 v1.13 — كانت تحفظ الرمزَ فوراً بلا أيّ بصمةٍ فعليّة، فتقولُ «تفعّلت البصمة»
-     *  حتى على جهازٍ لم يُسجَّل عليه بصمةٌ إطلاقاً — خللٌ أمنيٌّ حقيقيّ (أيُّ ممسكٍ
-     *  بالجهاز يُفعّل الدخول بلا أيّ عائق) ولُبسٌ على المستخدم (لم يوضَع إصبعٌ قط).
-     *  الآن: لا حفظَ إلا بعد بصمةٍ ناجحةٍ فعلاً؛ ولو لم تكن مُسجَّلةً على الجهاز
-     *  أصلاً، نرفض التفعيل ونوجّه المستخدم لتسجيلها من إعدادات الجهاز أوّلاً —
-     *  ذاك تسجيلُ البصمة نفسها (اضغط إصبعك ٣ مرّات فتُحفَظ) لا نملك نحن صلاحيّته،
-     *  فهو من صنيع نظام أندرويد حصراً لأسبابٍ أمنيّة. */
-    private fun bridgeActivateBiometricDevice(token: String) {
+    /** رسالةٌ مفهومة لأخطاء المفتاح/البصمة (null = ألغى المستخدم ⇒ لا رسالة). */
+    private fun explainSignError(err: String?) {
+        if (err == null) return
+        val msg = when {
+            err == "no_key" -> L("مفتاح هذا الجوال غير موجود — اطلب من الإدارة رمز ربطٍ جديد",
+                                 "This phone's key is missing — ask the admin for a new link code")
+            err == "key_invalidated" -> {
+                clearLink(L("تغيّرت البصمات المسجّلة على الجوال", "Fingerprints on the phone changed"))
+                L("تغيّرت البصمات المسجّلة على الجوال — لأمانك أُلغي الربط. اطلب من الإدارة ربطاً جديداً",
+                  "Phone fingerprints changed — the link was cancelled for safety. Ask the admin to link again")
+            }
+            err.startsWith("bio:") -> L("تعذّرت البصمة: ", "Fingerprint failed: ") + err.removePrefix("bio:").trim()
+            else -> L("تعذّر استعمال مفتاح الجوال: ", "Phone key error: ") + err
+        }
+        playToneError(); vibrateError(); toastMsg(msg)
+    }
+
+    // ─────────────── الطلبات ───────────────
+    /** طلبٌ JSON للخادم. cb(code, json, headers) على الخيط الرئيسيّ؛ code = -1 عند انقطاع الشبكة. */
+    private fun api(method: String, path: String, body: JSONObject?, ticket: String?,
+                    cb: (Int, JSONObject, Headers?) -> Unit) {
+        try {
+            val b = Request.Builder().url(getServerUrl() + path)
+            if (!ticket.isNullOrBlank()) b.header("X-Device-Ticket", ticket)
+            if (method == "GET") b.get()
+            else b.post((body ?: JSONObject()).toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType()))
+            apiClient.newCall(b.build()).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    runOnUiThread { cb(-1, JSONObject(), null) }
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    val txt = try { response.body?.string() ?: "" } catch (e: Exception) { "" }
+                    val j = try { JSONObject(txt) } catch (e: Exception) { JSONObject() }
+                    val code = response.code
+                    val h = response.headers
+                    response.close()
+                    runOnUiThread { cb(code, j, h) }
+                }
+            })
+        } catch (e: Exception) {
+            runOnUiThread { cb(-1, JSONObject(), null) }
+        }
+    }
+
+    private fun netErrorText(): String =
+        L("🔴 لا يوجد اتصال بالخادم — تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل",
+          "🔴 No connection — check the network and that the program is running")
+
+    /** يحفظ ما يرسله الخادم عن الجوال (الاسم، الشركة، الحالة، الصلاحيّات، التذكرة). */
+    private fun applyDeviceInfo(j: JSONObject) {
+        val e = prefs.edit()
+        if (j.has("full_name")) e.putString("md_full_name", j.optString("full_name"))
+        if (j.has("username")) e.putString("md_username", j.optString("username"))
+        if (j.has("company")) e.putString("md_company", j.optString("company"))
+        if (j.has("status")) e.putString("md_status", j.optString("status"))
+        e.putString("md_until", j.optString("until", ""))
+        j.optJSONObject("caps")?.let { e.putString("md_caps", it.toString()) }
+        e.remove("md_reason")
+        e.apply()
+        val t = j.optString("ticket", "")
+        if (t.isNotBlank() && t != "null") {
+            mdTicket = t
+            mdTicketExp = System.currentTimeMillis() + (j.optLong("expires_in", 43200L) - 60L) * 1000L
+        }
+        renderHome()
+    }
+
+    /** الإدارة سحبت الجوال (أو سُحب تلقائيّاً): نبقي رقمه للعرض فقط ونُظهر «ربط الجوال». */
+    private fun markRevoked(reason: String) {
+        mdTicket = null
+        prefs.edit().putString("md_status", "revoked").putString("md_reason", reason).apply()
+        renderHome()
+    }
+
+    private fun clearLink(reason: String) {
+        mdTicket = null
+        try {
+            val ks = KeyStore.getInstance("AndroidKeyStore"); ks.load(null)
+            if (ks.containsAlias(KEY_ALIAS)) ks.deleteEntry(KEY_ALIAS)
+        } catch (e: Exception) {}
+        prefs.edit().putString("md_status", "revoked").putString("md_reason", reason).apply()
+        renderHome()
+    }
+
+    /** ردٌّ مرفوض من طلبٍ بالتذكرة: يحدّث الحالة المحليّة ليطابق الخادم. يُرجع true إن عالجه. */
+    private fun handleDeviceDenial(code: Int, j: JSONObject): Boolean {
+        val c = j.optString("code", "")
+        runOnUiThread {
+            when (c) {
+                "ticket_invalid" -> mdTicket = null
+                "device_revoked" -> markRevoked(j.optString("reason", j.optString("error", "")))
+                "device_suspended", "not_allowed" -> fetchStatus(true)
+            }
+        }
+        return c.isNotBlank() && code in 400..499
+    }
+
+    /** فتح المفتاح بالبصمة ⇒ تذكرةٌ + الحالة. then(ok) على الخيط الرئيسيّ. */
+    private fun unlockDevice(reason: String, then: (Boolean) -> Unit) {
+        val did = deviceIdStr().toIntOrNull()
+        if (did == null || mdStatus() == "revoked") { renderHome(); then(false); return }
+        if (unlockBusy) { then(false); return }
+        unlockBusy = true
+        api("POST", "/api/mobile/challenge", JSONObject().put("purpose", "unlock").put("device_id", did), null) { code, j, _ ->
+            if (code == -1) { unlockBusy = false; updateConnectionUi(false); toastMsg(netErrorText()); then(false); return@api }
+            val nonce = j.optString("nonce", "")
+            if (code != 200 || nonce.isBlank()) {
+                unlockBusy = false
+                if (j.optString("code") == "device_revoked") markRevoked(j.optString("error", ""))
+                toastMsg(j.optString("error", L("تعذّر فتح التطبيق", "Unlock failed")))
+                then(false); return@api
+            }
+            signWithBiometric("awael|unlock|$did|$nonce", reason) { sig, err ->
+                if (sig == null) { unlockBusy = false; explainSignError(err); renderHome(); then(false); return@signWithBiometric }
+                api("POST", "/api/mobile/unlock",
+                    JSONObject().put("device_id", did).put("nonce", nonce).put("signature", sig), null) { c2, j2, _ ->
+                    unlockBusy = false
+                    when {
+                        c2 == -1 -> { toastMsg(netErrorText()); then(false) }
+                        c2 == 200 -> {
+                            updateConnectionUi(true)
+                            applyDeviceInfo(j2)
+                            if (j2.optString("status") == "suspended")
+                                toastMsg(L("هذا الجوال موقوف مؤقّتاً حتى ", "This phone is suspended until ") + j2.optString("until") +
+                                         L(" — راجع الإدارة", " — contact the admin"))
+                            then(validTicket() != null)
+                        }
+                        else -> {
+                            if (j2.optString("code") == "device_revoked") markRevoked(j2.optString("reason", j2.optString("error", "")))
+                            playToneError(); vibrateError()
+                            toastMsg(j2.optString("error", L("تعذّر فتح التطبيق", "Unlock failed")))
+                            then(false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** ينفّذ [action] بتذكرةٍ صالحة (يطلب البصمة فقط إن لم توجد). */
+    private fun withTicket(reason: String, action: (String) -> Unit) {
+        val t = validTicket()
+        if (t != null) { action(t); return }
+        unlockDevice(reason) { ok -> val t2 = validTicket(); if (ok && t2 != null) action(t2) }
+    }
+
+    /** تحديث الحالة والصلاحيّات بلا بصمة (بالتذكرة إن وُجدت) — عند العودة للرئيسيّة. */
+    private fun fetchStatus(force: Boolean) {
+        val t = validTicket() ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastStatusFetch < 5000) return
+        lastStatusFetch = now
+        api("GET", "/api/mobile/status", null, t) { code, j, _ ->
+            when {
+                code == 200 -> { updateConnectionUi(true); applyDeviceInfo(j) }
+                code == -1 -> updateConnectionUi(false)
+                else -> handleDeviceDenial(code, j)
+            }
+        }
+    }
+
+    // ─────────────── الصلاحيّات ───────────────
+    private fun capInfo(cap: String): JSONObject? =
+        try { JSONObject(prefs.getString("md_caps", "{}") ?: "{}").optJSONObject(cap) } catch (e: Exception) { null }
+
+    private fun capAllowed(cap: String): Boolean = capInfo(cap)?.optBoolean("allowed", false) ?: false
+
+    /** سبب المنع للعرض، أو null إن كانت الصلاحيّة متاحة. */
+    private fun capBlockReason(cap: String): String? {
+        if (!isLinked() || mdStatus() == "revoked") return L("الجوال غير مربوط — اضغط «ربط الجوال»", "Phone not linked")
+        if (mdStatus() == "suspended")
+            return L("هذا الجوال موقوف مؤقّتاً حتى ", "This phone is suspended until ") + (prefs.getString("md_until", "") ?: "") +
+                   L(" — راجع الإدارة", " — contact the admin")
+        val ci = capInfo(cap)
+        if (ci == null) return null   // لم تصل الحالة بعد (بلا شبكة) — الخادم يحسم عند التنفيذ
+        if (ci.optBoolean("allowed", false)) return null
+        return if (ci.optString("state") == "until")
+            L("موقوفة حتى ", "Suspended until ") + ci.optString("until") + L(" — راجع الإدارة", " — contact the admin")
+        else L("غير مفعّلة لهذا الجوال — راجع الإدارة", "Not enabled for this phone — contact the admin")
+    }
+
+    // ─────────────── الشاشة الرئيسيّة ───────────────
+    private fun setScannerViews(visible: Boolean) {
+        val v = if (visible) View.VISIBLE else View.GONE
+        previewView.visibility = v
+        findViewById<View>(R.id.scanBox).visibility = v
+        findViewById<View>(R.id.headerStack).visibility = v
+        bottomBar.visibility = v
+        findViewById<View>(R.id.btnMenu).visibility = v
+        btnTorch.visibility = v
+        findViewById<View>(R.id.btnRefresh).visibility = v
+        btnSettings.visibility = View.GONE
+        btnSite?.visibility = View.GONE
+    }
+
+    private fun showHome() {
+        if (stkActive) return
+        if (scanForSite) stopSiteScan()
+        mode = "home"
+        loginFlowBusy = false
+        stopCamera()
+        setScannerViews(false)
+        layoutSettings.visibility = View.GONE
+        web?.let { if (it.visibility == View.VISIBLE) { it.visibility = View.GONE; _siteRevealed = false } }
+        val h = homeView ?: return
+        h.visibility = View.VISIBLE
+        h.bringToFront()
+        renderHome()
+        fetchStatus(false)
+    }
+
+    /** شاشة الكاميرا (الماسح/الربط/دخول الكمبيوتر) — نفس تصميم الماسح القديم. */
+    private fun showCameraScreen(newMode: String, hint: String) {
+        mode = newMode
+        homeView?.visibility = View.GONE
+        layoutSettings.visibility = View.GONE
+        setScannerViews(true)
+        val scanner = newMode == "scanner"
+        txtScanCount?.visibility = if (scanner) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btnRefresh).visibility = if (scanner) View.VISIBLE else View.GONE   // نمط النطق
+        lastScannedCode = null; lastScanTime = 0L; isFrameClear = true
+        resultClearRunnable?.let { heartbeatHandler.removeCallbacks(it); resultClearRunnable = null }
+        showTopResult(hint, "#CC0F172A")
+        txtItemName.text = ""
+        txtItemDetails.text = ""
+        txtStatusBadge.text = if (scanner) L("جاهز للمسح", "Ready to scan") else L("بانتظار الرمز…", "Waiting for the code…")
+        setBadgeStyle("#1E293B", "#38BDF8", "#334155")
+        previewView.bringToFront()
+        findViewById<View>(R.id.scanBox).bringToFront()
+        findViewById<View>(R.id.headerStack).bringToFront()
+        bottomBar.bringToFront()
+        findViewById<View>(R.id.btnMenu).bringToFront()
+        btnTorch.bringToFront()
+        findViewById<View>(R.id.btnRefresh).bringToFront()
+        startCamera()
+    }
+
+    private fun buildHome() {
+        val root = previewView.parent as android.view.ViewGroup
+        val scroll = ScrollView(this)
+        scroll.setBackgroundColor(Color.parseColor("#0B1220"))
+        scroll.isFillViewport = true
+        scroll.elevation = dp(30).toFloat()   // فوق عناصر الماسح المرفوعة (elevation) مهما كان ترتيبها
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = android.view.Gravity.CENTER_HORIZONTAL
+        col.setPadding(dp(18), dp(22) + statusBarH(), dp(18), dp(18))
+
+        val logo = ImageView(this)
+        logo.setImageResource(R.mipmap.ic_launcher)
+        logo.layoutParams = LinearLayout.LayoutParams(dp(78), dp(78))
+        col.addView(logo)
+        val title = TextView(this)
+        title.text = L("نظام الأوائل", "Al-Awael")
+        title.setTextColor(Color.WHITE); title.textSize = 20f
+        title.setTypeface(title.typeface, android.graphics.Typeface.BOLD)
+        title.gravity = android.view.Gravity.CENTER
+        title.setPadding(0, dp(8), 0, dp(14))
+        col.addView(title)
+
+        // بطاقة الحالة: الاسم الكامل · الشركة · نقطة الاتصال
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.setPadding(dp(16), dp(14), dp(16), dp(14))
+        card.background = roundBg("#1E293B", dp(16).toFloat())
+        card.layoutParams = LinearLayout.LayoutParams(-1, -2)
+        val name = TextView(this)
+        name.setTextColor(Color.WHITE); name.textSize = 17f
+        name.setTypeface(name.typeface, android.graphics.Typeface.BOLD)
+        homeName = name
+        val comp = TextView(this)
+        comp.setTextColor(Color.parseColor("#94A3B8")); comp.textSize = 13f
+        comp.setPadding(0, dp(2), 0, dp(6))
+        homeCompany = comp
+        val connRow = LinearLayout(this)
+        connRow.orientation = LinearLayout.HORIZONTAL
+        connRow.gravity = android.view.Gravity.CENTER_VERTICAL
+        val dot = View(this)
+        dot.layoutParams = LinearLayout.LayoutParams(dp(9), dp(9)).apply { marginEnd = dp(6) }
+        homeDot = dot
+        val conn = TextView(this)
+        conn.textSize = 12f
+        homeConn = conn
+        connRow.addView(dot); connRow.addView(conn)
+        val note = TextView(this)
+        note.textSize = 13f
+        note.setPadding(0, dp(8), 0, 0)
+        note.visibility = View.GONE
+        homeNote = note
+        card.addView(name); card.addView(comp); card.addView(connRow); card.addView(note)
+        col.addView(card)
+
+        val tiles = LinearLayout(this)
+        tiles.orientation = LinearLayout.VERTICAL
+        tiles.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) }
+        homeTiles = tiles
+        col.addView(tiles)
+
+        val spacer = View(this)
+        spacer.layoutParams = LinearLayout.LayoutParams(1, 0, 1f)
+        col.addView(spacer)
+
+        // أزرار صغيرة: الإعدادات · عن التطبيق
+        val foot = LinearLayout(this)
+        foot.orientation = LinearLayout.HORIZONTAL
+        foot.gravity = android.view.Gravity.CENTER
+        foot.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) }
+        fun small(label: String, onClick: () -> Unit): Button = Button(this).apply {
+            text = label; textSize = 13f; isAllCaps = false
+            setTextColor(Color.parseColor("#CBD5E1"))
+            background = roundBg("#1E293B", dp(12).toFloat())
+            layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(6), 0, dp(6), 0) }
+            setOnClickListener { onClick() }
+        }
+        foot.addView(small(L("⚙️ الإعدادات", "⚙️ Settings")) { openSettings() })
+        foot.addView(small(L("ℹ️ عن التطبيق", "ℹ️ About")) { showAbout() })
+        col.addView(foot)
+
+        scroll.addView(col)
+        root.addView(scroll, android.view.ViewGroup.LayoutParams(-1, -1))
+        homeView = scroll
+        updateHomeConnection()
+        renderHome()
+    }
+
+    private fun updateHomeConnection() {
+        val dot = homeDot ?: return
+        dot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(if (isServerConnected) "#22C55E" else "#EF4444"))
+        }
+        homeConn?.text = if (isServerConnected) L("متصل بالنظام", "Connected") else L("غير متصل بالخادم", "Not connected")
+        homeConn?.setTextColor(Color.parseColor(if (isServerConnected) "#4ADE80" else "#F87171"))
+    }
+
+    private fun renderHome() {
+        val tiles = homeTiles ?: return
+        val linked = isLinked() && mdStatus() != "revoked"
+        homeName?.text = if (linked) (prefs.getString("md_full_name", "") ?: "").ifBlank { prefs.getString("md_username", "") ?: "" }
+                         else L("الجوال غير مربوط", "Phone not linked")
+        homeCompany?.text = if (linked) (prefs.getString("md_company", "") ?: "") else
+            L("الإدارة تعرض رمز الربط من: المستخدمين ← أجهزة الجوال", "Admin shows the link code from Users → Mobile devices")
+        val note: String? = when {
+            isLinked() && mdStatus() == "revoked" ->
+                L("⛔ سُحب ربط هذا الجوال", "⛔ This phone's link was revoked") +
+                    ((prefs.getString("md_reason", "") ?: "").let { if (it.isNotBlank()) " — $it" else "" }) +
+                    L("\nاطلب من الإدارة رمز ربطٍ جديد", "\nAsk the admin for a new link code")
+            linked && mdStatus() == "suspended" ->
+                L("⏸ موقوف مؤقّتاً حتى ", "⏸ Suspended until ") + (prefs.getString("md_until", "") ?: "") + L(" — راجع الإدارة", " — contact the admin")
+            linked && validTicket() == null -> L("🔒 مقفل — اضغط أيّ مربّعٍ للفتح بالبصمة", "🔒 Locked — tap a tile to unlock")
+            else -> null
+        }
+        homeNote?.let { n ->
+            if (note == null) n.visibility = View.GONE
+            else {
+                n.visibility = View.VISIBLE; n.text = note
+                n.setTextColor(Color.parseColor(if (note.startsWith("⛔")) "#F87171" else if (note.startsWith("⏸")) "#FBBF24" else "#93C5FD"))
+            }
+        }
+        updateHomeConnection()
+        tiles.removeAllViews()
+        if (!linked) {
+            tiles.addView(tileRow(listOf(Triple("link", "🔗", L("ربط الجوال", "Link phone")))))
+            return
+        }
+        tiles.addView(tileRow(listOf(
+            Triple("mobile_login", "🏠", L("الدخول للنظام", "Open the system")),
+            Triple("scanner", "📷", L("قارئ الباركود", "Barcode scanner")))))
+        tiles.addView(tileRow(listOf(
+            Triple("stocktake", "🧮", L("الجرد", "Stocktake")),
+            Triple("pc_login", "🖥️", L("الدخول للكمبيوتر", "Computer login")))))
+    }
+
+    private fun tileRow(items: List<Triple<String, String, String>>): View {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.layoutParams = LinearLayout.LayoutParams(-1, -2)
+        for (it in items) row.addView(buildTile(it.first, it.second, it.third))
+        return row
+    }
+
+    private fun buildTile(cap: String, icon: String, label: String): View {
+        val blocked = if (cap == "link") null else capBlockReason(cap)
+        val t = LinearLayout(this)
+        t.orientation = LinearLayout.VERTICAL
+        t.gravity = android.view.Gravity.CENTER
+        t.setPadding(dp(8), dp(16), dp(8), dp(14))
+        t.background = roundBg(if (blocked == null) (if (cap == "link") "#0369A1" else "#1E293B") else "#111827", dp(16).toFloat())
+        t.layoutParams = LinearLayout.LayoutParams(0, dp(118), 1f).apply { setMargins(dp(6), dp(6), dp(6), dp(6)) }
+        val ic = TextView(this)
+        ic.text = if (blocked == null) icon else "🔒"
+        ic.textSize = 30f
+        ic.gravity = android.view.Gravity.CENTER
+        val lb = TextView(this)
+        lb.text = label
+        lb.textSize = 14f
+        lb.gravity = android.view.Gravity.CENTER
+        lb.setTypeface(lb.typeface, android.graphics.Typeface.BOLD)
+        lb.setTextColor(Color.parseColor(if (blocked == null) "#F8FAFC" else "#64748B"))
+        lb.setPadding(0, dp(6), 0, 0)
+        t.addView(ic); t.addView(lb)
+        val until = capInfo(cap)?.optString("state") == "until"
+        if (blocked != null && until) {
+            val sub = TextView(this)
+            sub.text = L("حتى ", "until ") + (capInfo(cap)?.optString("until") ?: "")
+            sub.textSize = 11f; sub.gravity = android.view.Gravity.CENTER
+            sub.setTextColor(Color.parseColor("#FBBF24"))
+            t.addView(sub)
+        }
+        t.setOnClickListener { onTile(cap) }
+        return t
+    }
+
+    private fun onTile(cap: String) {
+        if (cap == "link") { startEnroll(); return }
+        val why = capBlockReason(cap)
+        if (why != null) { playToneWarning(); toastMsg(why); return }
+        when (cap) {
+            "mobile_login" -> withTicket(L("الدخول للنظام", "Open the system")) { t -> openSystemWithTicket(t, true) }
+            "scanner" -> withTicket(L("قارئ الباركود", "Barcode scanner")) { _ ->
+                if (capBlockReason("scanner") == null)
+                    showCameraScreen("scanner", L("وجّه الكاميرا نحو الباركود…", "Aim the camera at a barcode…"))
+                else toastMsg(capBlockReason("scanner") ?: "")
+            }
+            "stocktake" -> withTicket(L("الجرد", "Stocktake")) { t -> openStocktakeList(t) }
+            "pc_login" -> startPcLogin()
+        }
+    }
+
+    // ─────────────── الربط (مرّةً واحدة) ───────────────
+    private fun startEnroll() {
         if (!biometricAvailable()) {
-            runOnUiThread {
-                toastMsg(L(
-                    "لا توجد بصمةٌ مسجَّلةٌ على هذا الجهاز. افتح إعدادات الجهاز ← الأمان ← البصمة، "
-                        + "وسجّل بصمتك هناك أوّلاً (يطلب منك وضع إصبعك عدّة مرّات ثم يحفظها)، ثم ارجع واضغط «تفعيل» من جديد.",
-                    "No fingerprint is enrolled on this device. Open device Settings → Security → Fingerprint, "
-                        + "register one there first (it asks you to touch the sensor a few times then saves it), then come back and tap Activate again."
-                ))
-            }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(L("سجّل بصمتك أوّلاً", "Enroll a fingerprint first"))
+                .setMessage(L("الربط يقفل مفتاح الجوال ببصمتك. افتح إعدادات الجوال ← الأمان ← البصمة وسجّل بصمةً، ثم ارجع واضغط «ربط الجوال».",
+                              "Linking locks the phone key with your fingerprint. Open phone Settings → Security → Fingerprint, add one, then come back."))
+                .setPositiveButton(L("حسناً", "OK"), null)
+                .show()
             return
         }
-        requireBiometric(L("ضع بصمتك لتأكيد تفعيل الدخول بها", "Scan your fingerprint to confirm enabling fingerprint login")) {
-            saveDeviceToken(token)
-            runOnUiThread { toastMsg(L("✅ تفعّلت البصمة للدخول على هذا الجهاز", "✅ Fingerprint login activated on this device")) }
-        }
+        showCameraScreen("enroll", L("📷 امسح رمز الربط من الكمبيوتر\n(المستخدمين ← أجهزة الجوال ← ربط جوال جديد)",
+                                     "📷 Scan the link code from the computer\n(Users → Mobile devices → Link new phone)"))
     }
 
-    private fun bridgeHasBiometricDevice(): Boolean = !getDeviceToken().isNullOrBlank()
-
-    private fun bridgeDeactivateBiometricDevice() {
-        // 🐞 v10.509 — كانت تمسح الرمز محليّاً فقط وتتركه صالحاً على السيرفر للأبد
-        //   (لو تسرّب قبل الإلغاء يبقى شغّالاً رغم «الإلغاء»). الآن نسحبه من السيرفر
-        //   أوّلاً بأفضل جهد — لا ننتظره ولا نوقف الإلغاء المحليّ لو تعذّر الاتصال؛
-        //   إلغاء البصمة على هذا الجهاز نفسه هو الأهمّ لصاحبه ولا يجب أن يتعطّل بلا شبكة.
-        val tok = getDeviceToken()
-        if (!tok.isNullOrBlank()) {
-            try {
-                val body = JSONObject().apply { put("device_token", tok) }
-                    .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val req = Request.Builder().url("${getServerUrl()}/api/auth/qr-devices/revoke-self").post(body).build()
-                httpClient.newCall(req).enqueue(object : Callback {
-                    override fun onFailure(call: Call, e: IOException) { /* بلا شبكةٍ الآن — لا نُعطّل الإلغاء المحليّ */ }
-                    override fun onResponse(call: Call, response: Response) { response.close() }
-                })
-            } catch (e: Exception) { /* أفضل جهدٍ فقط */ }
-        }
-        clearDeviceToken()
-        runOnUiThread { toastMsg(L("تمّ إلغاء البصمة على هذا الجهاز", "Fingerprint login deactivated on this device")) }
-    }
-
-    /** 🆕 v1.21 — تسجيل دخول **شاشة الموقع نفسِها هنا على الجوّال** بالبصمة، بلا كتابة
-     *  يوزر/باسورد — يختلف عن `handleLoginQR` (الذي يؤكّد جلسةَ كمبيوترٍ *آخر*): هذا
-     *  يسجّل دخول جلسةِ الـWebView الحاليّة مباشرةً. يتطلّب device_token محليّاً
-     *  (من تفعيلٍ سابق) — الموقعُ يستدعيه فقط لو `hasBiometricDevice()` صحيحة. */
-    private fun bridgeLoginWithBiometric() {
-        val token = getDeviceToken()
-        if (token.isNullOrBlank()) {
-            web?.evaluateJavascript(
-                "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'no_device')", null)
-            return
-        }
-        requireBiometric(L("تسجيل الدخول بالبصمة", "Log in with fingerprint"), onFail = {
-            web?.evaluateJavascript(
-                "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'biometric_failed')", null)
-        }) {
-            _deviceLoginRequest(token)
-        }
-    }
-
-    /** الطلبُ الفعليُّ لتسجيل الدخول بـdevice_token بعد نجاح البصمة محليّاً.
-     *  🍪 الجلسة (Flask session cookie) تصل هنا عبر OkHttp لا عبر الـWebView — يجب
-     *  زرعها يدويّاً فى CookieManager كى تحملها طلبات الـWebView (fetch/XHR) القادمة. */
-    private fun _deviceLoginRequest(token: String) {
-        val body = JSONObject().apply { put("device_token", token) }
-            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val req = Request.Builder().url("${getServerUrl()}/api/auth/device-login").post(body).build()
-        httpClient.newCall(req).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                runOnUiThread {
-                    web?.evaluateJavascript(
-                        "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'network')", null)
-                }
-            }
-            override fun onResponse(call: Call, response: Response) {
-                val bodyStr = response.body?.string() ?: "{}"
-                val json = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
-                val ok = json.optBoolean("success", false)
-                if (ok && response.isSuccessful) {
-                    try {
-                        val cookies = response.headers("Set-Cookie")
-                        val cm = android.webkit.CookieManager.getInstance()
-                        val srvUrl = getServerUrl()
-                        for (c in cookies) cm.setCookie(srvUrl, c)
-                        cm.flush()
-                    } catch (e: Exception) { /* لو فشل زرع الكوكيز، الصفحةُ ستُظهر خطأ دخولٍ طبيعياً */ }
-                    val uObj = json.optJSONObject("user")
-                    val uname = (uObj?.optString("username", "") ?: "")
-                        .replace("\\", "\\\\").replace("'", "\\'")
-                    val fullName = (uObj?.optString("full_name", "") ?: "")
-                        .replace("\\", "\\\\").replace("'", "\\'")
-                    runOnUiThread {
-                        playToneSuccess(); vibrateSuccess()
-                        web?.evaluateJavascript(
-                            "window.onBiometricLoginResult && window.onBiometricLoginResult(true,'$uname','$fullName')", null)
-                    }
-                } else {
-                    val err = (json.optString("error", "")).replace("\\", "\\\\").replace("'", "\\'")
-                    runOnUiThread {
-                        playToneError(); vibrateError()
-                        web?.evaluateJavascript(
-                            "window.onBiometricLoginResult && window.onBiometricLoginResult(false,'server','$err')", null)
-                    }
-                }
-            }
-        })
-    }
-
-    /** رمز QR دخولٍ (من شاشة الكمبيوتر): awael://login?token=... — يُطلب بصمةً محليّةً
-     *  (لا كلمة مرور) ثم يؤكّد الجلسة على السيرفر برمز الجهاز المحفوظ. */
-    private fun handleLoginQR(code: String) {
+    private fun handleEnrollQR(code: String) {
         val uri = try { android.net.Uri.parse(code) } catch (e: Exception) { null }
-        val qrToken = uri?.getQueryParameter("token")
-        if (qrToken.isNullOrBlank()) {
-            runOnUiThread { playToneWarning(); vibrateWarning()
-                toastMsg(L("رمز دخولٍ غير صالح", "Invalid login QR")) }
-            return
-        }
-        // 🐞 v1.15 — رمزُ الدخول (منذ v10.506) يحملُ عنوانَ هذا الكمبيوترِ أيضاً (ip/port)،
-        //   تماماً كرمز /link القديم. نحفظه فوراً بلا شرط: فجوّالٌ لم يُقترن بهذا الكمبيوتر
-        //   من قبل (يعرض «غير متصل» لأنه لا يعرف عنوانه على الشبكة) يصير متصلاً بمجرد
-        //   مسح رمز الدخول نفسه — بلا حاجةٍ لصفحة /link كخطوةٍ منفصلة أولاً.
-        val qrIp = uri?.getQueryParameter("ip")
-        if (!qrIp.isNullOrBlank()) {
-            val qrPort = uri.getQueryParameter("port") ?: "5005"
-            // 🐞 v1.17 — رمزُ الدخول (منذ v10.508) يحملُ sid هذا الكاشير أيضاً، تماماً
-            //   كرمز /link. بدونه كان الجوّالُ يبعث الباركودَ تحت 'default' بينما
-            //   المتصفحُ يستمعُ تحت sid السيرفر (يوزر+جهاز) ⇒ الباركودُ لا يصل للكمبيوتر
-            //   إطلاقاً رغم أن الدخولَ نفسه يعمل. نحفظه هنا فقط لو وُجد فى الرمز (لا نمسح
-            //   اقتراناً سابقاً صحيحاً بفراغ لو رمزٌ قديمٌ بلا sid وصل بطريقةٍ ما).
-            val qrSid = uri.getQueryParameter("sid")
-            // 🐞 v10.510 — مفتاحُ حمايةِ الماسحِ (scan_token) **لا** يصل هنا من رمز QR
-            //   نفسِه عمداً (أمانٌ: رمزُ الدخول يظهر قبل تسجيل الدخول، وتضمين المفتاح
-            //   الثابت فيه كان سيُسرِّبه لأي عابرٍ يصوّر الشاشة). يصل بدلاً من هذا فى ردّ
-            //   `confirmQrLoginOnServer` — فقط بعد نجاح مصادقةٍ فعليّة.
-            val editor = prefs.edit().putString("server_ip", qrIp).putString("server_port", qrPort)
-            if (!qrSid.isNullOrBlank()) editor.putString("session_id", qrSid)
-            editor.apply()
+        val token = uri?.getQueryParameter("t") ?: ""
+        val ip = uri?.getQueryParameter("ip") ?: ""
+        val port = uri?.getQueryParameter("port") ?: "5005"
+        if (token.isBlank()) { playToneWarning(); showTopResult(L("⚠️ رمز ربط غير صالح", "⚠️ Invalid link code"), "#B45309"); return }
+        loginFlowBusy = true
+        if (ip.isNotBlank()) {
+            prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
             reloadSiteIfAddressChanged()
-            runOnUiThread { edtServerIp.setText(qrIp); edtServerPort.setText(qrPort) }
+            edtServerIp.setText(ip); edtServerPort.setText(port)
         }
-        val deviceToken = getDeviceToken()
-        if (deviceToken.isNullOrBlank()) {
-            // 🐞 v1.14 — كانت تكتفي بتوستٍ ثم تتركُ المستخدمَ عالقاً (لازم يفتح القائمةَ
-            //   يدويّاً ويلاقي الموقعَ ثم الإعداداتِ بنفسه). الآن: نفتحُ له الموقعَ مباشرةً
-            //   فوق شاشة الماسح — فيُسجّل دخولَه بيوزره وكلمة مروره أوّلَ مرّة (هذه الخطوةُ
-            //   لا غنى عنها: رمزُ QR ظاهرٌ لأيّ أحدٍ ينظر للشاشة، فلا يصلحُ إثباتَ هويّةٍ
-            //   وحدَه — يلزم كلمةُ مرورٍ أو بصمةٌ مفعَّلةٌ مسبقاً)، ثم من القائمة يفعّل
-            //   البصمةَ بضغطةٍ واحدة. تجربةٌ متّصلةٌ بدل توستٍ ثم طريقٍ مسدود.
-            runOnUiThread {
-                playToneWarning(); vibrateWarning()
-                toastMsg(L("سجّل دخولك أوّلاً بيوزرك، ثم فعّل البصمة من القائمة ← الإعدادات",
-                           "Log in with your username first, then activate fingerprint from the menu → settings"))
-                openSite()
+        vibrateSuccess()
+        showTopResult(L("⏳ جارٍ الربط…", "⏳ Linking…"), "#CC0F172A")
+        api("POST", "/api/mobile/challenge", JSONObject().put("purpose", "enroll").put("token", token), null) { c, j, _ ->
+            val nonce = j.optString("nonce", "")
+            if (c != 200 || nonce.isBlank()) {
+                loginFlowBusy = false
+                playToneError(); vibrateError()
+                toastMsg(if (c == -1) netErrorText() else j.optString("error", L("رمز الربط غير صالح", "Invalid link code")))
+                showHome(); return@api
             }
-            return
-        }
-        loginFlowBusy = true   // 🐞 v1.14 — نُجمّد استقبال أيّ مسحٍ آخر حتى تنتهي محاولةُ الدخول هذه
-        requireBiometric(L("تأكيد تسجيل الدخول على كمبيوترٍ آخر", "Confirm login on another computer"),
-            onFail = { loginFlowBusy = false }) {
-            confirmQrLoginOnServer(qrToken, deviceToken)
-        }
-    }
-
-    private fun confirmQrLoginOnServer(qrToken: String, deviceToken: String) {
-        val body = JSONObject().apply { put("token", qrToken); put("device_token", deviceToken) }
-            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val req = Request.Builder().url("${getServerUrl()}/api/auth/qr-session/confirm").post(body).build()
-        httpClient.newCall(req).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                loginFlowBusy = false   // 🐞 v1.14
-                runOnUiThread { playToneError(); vibrateError()
-                    toastMsg(L("تعذّر الاتصال بالسيرفر", "Could not reach the server")) }
+            val who = j.optString("full_name", "") + (j.optString("company", "").let { if (it.isNotBlank()) " — $it" else "" })
+            val pub = try { generateDeviceKey() } catch (e: Exception) {
+                loginFlowBusy = false
+                playToneError(); vibrateError()
+                toastMsg(L("تعذّر إنشاء مفتاح الجوال: ", "Could not create the phone key: ") + (e.message ?: ""))
+                showHome(); return@api
             }
-            override fun onResponse(call: Call, response: Response) {
-                loginFlowBusy = false   // 🐞 v1.14
-                val bodyStr = response.body?.string() ?: "{}"
-                val json = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
-                val ok = json.optBoolean("success", false)
-                if (ok && response.isSuccessful) {
-                    // 🐞 v10.510 — مفتاحُ حمايةِ الماسحِ (scan_token) وsid يصلان هنا فقط —
-                    //   بعد نجاح مصادقةٍ حقيقيّة — لا داخل رمز QR نفسه (كان سيُسرَّب لأي عابرٍ
-                    //   يصوّر شاشةَ الدخول قبل أي تسجيل دخولٍ فعلي). بدونهما كان كلُّ باركودٍ
-                    //   يُرفَض صامتاً من الخادم رغم أن الدخول نفسه ناجح.
-                    val sSid = json.optString("sid", "")
-                    val sTok = json.optString("scan_token", "")
-                    if (sSid.isNotBlank() || sTok.isNotBlank()) {
-                        val e2 = prefs.edit()
-                        if (sSid.isNotBlank()) e2.putString("session_id", sSid)
-                        if (sTok.isNotBlank()) e2.putString("scan_token", sTok)
-                        e2.apply()
-                    }
-                }
-                runOnUiThread {
-                    if (ok && response.isSuccessful) {
+            signWithBiometric("awael|enroll|${sha256Hex(token)}|$nonce", L("ربط هذا الجوال باسم: ", "Link this phone to: ") + who) { sig, err ->
+                if (sig == null) { loginFlowBusy = false; explainSignError(err); showHome(); return@signWithBiometric }
+                val label = (Build.MANUFACTURER + " " + Build.MODEL).trim()
+                api("POST", "/api/mobile/enroll", JSONObject().put("token", token).put("nonce", nonce)
+                    .put("public_key", pub).put("signature", sig).put("device_label", label), null) { c2, j2, _ ->
+                    loginFlowBusy = false
+                    if (c2 == 200 && j2.optInt("device_id", 0) > 0) {
+                        prefs.edit().putString("md_device_id", j2.optInt("device_id").toString()).apply()
+                        applyDeviceInfo(j2)
+                        updateConnectionUi(true)
                         playToneSuccess(); vibrateSuccess()
-                        toastMsg(L("✅ تمّ تسجيل الدخول على الكمبيوتر", "✅ Logged in on the computer"))
+                        toastMsg(L("✅ رُبط الجوال باسم ", "✅ Phone linked to ") + j2.optString("full_name"))
                     } else {
                         playToneError(); vibrateError()
-                        toastMsg(L("انتهت صلاحية الرمز — افتح شاشة الدخول من جديد", "QR expired — reopen the login screen"))
+                        toastMsg(if (c2 == -1) netErrorText() else j2.optString("error", L("تعذّر الربط", "Link failed")))
                     }
+                    showHome()
                 }
             }
-        })
+        }
     }
+
+    // ─────────────── الدخول للنظام على الجوال ───────────────
+    /** يفتح جلسة المستخدم الأساسيّ بالتذكرة ويزرعها في الـWebView. cb(ok, username, fullName, error) */
+    private fun startMobileSession(ticket: String, retried: Boolean, cb: (Boolean, String, String, String) -> Unit) {
+        api("POST", "/api/mobile/session", null, ticket) { code, j, headers ->
+            if (code == 200 && j.optBoolean("success", false)) {
+                try {
+                    val cm = android.webkit.CookieManager.getInstance()
+                    cm.setAcceptCookie(true)
+                    val srv = getServerUrl()
+                    for (c in headers?.values("Set-Cookie") ?: emptyList()) cm.setCookie(srv, c)
+                    cm.flush()
+                } catch (e: Exception) {}
+                val u = j.optJSONObject("user")
+                cb(true, u?.optString("username", "") ?: "", u?.optString("full_name", "") ?: "", "")
+                return@api
+            }
+            if (code == -1) { cb(false, "", "", "network"); return@api }
+            handleDeviceDenial(code, j)
+            if (j.optString("code") == "ticket_invalid" && !retried) {
+                // الخادم أُعيد تشغيله (التذاكر في ذاكرته): بصمةٌ واحدة ثم نكمل
+                unlockDevice(L("إعادة الدخول", "Sign in again")) { ok ->
+                    val t2 = validTicket()
+                    if (ok && t2 != null) startMobileSession(t2, true, cb) else cb(false, "", "", "biometric_failed")
+                }
+                return@api
+            }
+            cb(false, "", "", j.optString("error", "server"))
+        }
+    }
+
+    private fun openSystemWithTicket(ticket: String, fromHome: Boolean) {
+        startMobileSession(ticket, false) { ok, _, _, err ->
+            if (ok) {
+                siteLoaded = false   // تحميلٌ نظيف بالجلسة الجديدة
+                openSite()
+            } else if (fromHome && err != "biometric_failed") {
+                playToneError(); vibrateError()
+                toastMsg(if (err == "network") netErrorText() else err)
+            }
+        }
+    }
+
+    private fun bridgeHasBiometricDevice(): Boolean =
+        isLinked() && mdStatus() != "revoked" && capAllowed("mobile_login")
+
+    /** زرّ «الدخول بالبصمة» في شاشة دخول الموقع — بصمةٌ صريحة دائماً (المستخدم ضغطها للتوّ). */
+    private fun bridgeLoginWithBiometric() {
+        fun result(js: String) { web?.evaluateJavascript("window.onBiometricLoginResult && window.onBiometricLoginResult($js)", null) }
+        if (!bridgeHasBiometricDevice()) { result("false,'no_device'"); return }
+        unlockDevice(L("الدخول للنظام بالبصمة", "Log in with fingerprint")) { ok ->
+            val t = validTicket()
+            if (!ok || t == null) { result("false,'biometric_failed'"); return@unlockDevice }
+            startMobileSession(t, true) { ok2, uname, full, err ->
+                if (ok2) { playToneSuccess(); vibrateSuccess(); result("true,'${jsq(uname)}','${jsq(full)}'") }
+                else { playToneError(); vibrateError(); result("false,'server','${jsq(err)}'") }
+            }
+        }
+    }
+
+    /** انتهت الجلسة أثناء العمل (401): أعِد الدخول وحدك — بالتذكرة إن كانت صالحة (بلا بصمة)، وإلا بصمةٌ واحدة. */
+    private fun bridgeReauth() {
+        fun done(ok: Boolean) { web?.evaluateJavascript("window.onAwaelReauth && window.onAwaelReauth(" + (if (ok) "true" else "false") + ")", null) }
+        if (!bridgeHasBiometricDevice()) { done(false); return }
+        val t = validTicket()
+        if (t != null) { startMobileSession(t, false) { ok, _, _, _ -> done(ok) }; return }
+        unlockDevice(L("انتهت الجلسة — أعد الدخول بالبصمة", "Session ended — sign in with fingerprint")) { ok ->
+            val t2 = validTicket()
+            if (!ok || t2 == null) { done(false); return@unlockDevice }
+            startMobileSession(t2, true) { ok2, _, _, _ -> done(ok2) }
+        }
+    }
+
+    // ─────────────── الجرد: الجلسات المفتوحة تصل مباشرةً (بلا مسح رمز) ───────────────
+    private fun openStocktakeList(ticket: String) {
+        api("GET", "/api/mobile/stocktake/sessions", null, ticket) { code, j, _ ->
+            if (code != 200) {
+                if (code == -1) { toastMsg(netErrorText()); return@api }
+                handleDeviceDenial(code, j)
+                if (j.optString("code") == "ticket_invalid") {
+                    unlockDevice(L("الجرد", "Stocktake")) { ok -> val t2 = validTicket(); if (ok && t2 != null) openStocktakeList(t2) }
+                } else { playToneError(); toastMsg(j.optString("error", L("تعذّر جلب جلسات الجرد", "Could not load sessions"))) }
+                return@api
+            }
+            val arr = j.optJSONArray("sessions") ?: JSONArray()
+            val counter = j.optString("counter", "")
+            if (arr.length() == 0) {
+                playToneWarning()
+                toastMsg(L("لا توجد جلسة جرد مفتوحة — افتح جلسةً من الكمبيوتر (المخزون ← الجرد)",
+                           "No open stocktake session — open one on the computer"))
+                return@api
+            }
+            fun enter(o: JSONObject) {
+                val place = o.optString("place", "").ifBlank { o.optString("warehouse_name", "") }
+                enterStocktakeSession(o.optInt("id").toString(), o.optString("code", ""), place, counter,
+                    o.optInt("retain_days", 30), true)
+            }
+            if (arr.length() == 1) { enter(arr.getJSONObject(0)); return@api }
+            val labels = Array(arr.length()) { i ->
+                val o = arr.getJSONObject(i)
+                "#" + o.optInt("id") + "  " + o.optString("place", "").ifBlank { o.optString("warehouse_name", "") }
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(L("اختر جلسة الجرد", "Choose a stocktake session"))
+                .setItems(labels) { _, which -> enter(arr.getJSONObject(which)) }
+                .setNegativeButton(L("إلغاء", "Cancel"), null)
+                .show()
+        }
+    }
+
+    // ─────────────── الدخول للكمبيوتر (رمز شاشة الدخول) ───────────────
+    private fun startPcLogin() {
+        if (!isLinked()) { startEnroll(); return }
+        showCameraScreen("pclogin", L("📷 امسح رمز الدخول الظاهر على شاشة الكمبيوتر", "📷 Scan the login code on the computer screen"))
+    }
+
+    private fun handlePcLoginQR(code: String) {
+        val uri = try { android.net.Uri.parse(code) } catch (e: Exception) { null }
+        val qr = uri?.getQueryParameter("token") ?: ""
+        val did = deviceIdStr().toIntOrNull()
+        if (qr.isBlank() || did == null) { playToneWarning(); showTopResult(L("⚠️ رمز دخول غير صالح", "⚠️ Invalid login code"), "#B45309"); return }
+        val ip = uri?.getQueryParameter("ip") ?: ""
+        if (ip.isNotBlank()) {
+            val port = uri?.getQueryParameter("port") ?: "5005"
+            prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
+            reloadSiteIfAddressChanged()
+            edtServerIp.setText(ip); edtServerPort.setText(port)
+        }
+        loginFlowBusy = true
+        vibrateSuccess()
+        showTopResult(L("⏳ جارٍ التأكيد…", "⏳ Confirming…"), "#CC0F172A")
+        api("POST", "/api/mobile/challenge", JSONObject().put("purpose", "pc_login").put("device_id", did), null) { c, j, _ ->
+            val nonce = j.optString("nonce", "")
+            if (c != 200 || nonce.isBlank()) {
+                loginFlowBusy = false
+                if (j.optString("code") == "device_revoked") markRevoked(j.optString("error", ""))
+                playToneError(); vibrateError()
+                toastMsg(if (c == -1) netErrorText() else j.optString("error", L("تعذّر التأكيد", "Could not confirm")))
+                showHome(); return@api
+            }
+            signWithBiometric("awael|pc_login|$did|$nonce|$qr", L("تأكيد الدخول على الكمبيوتر", "Confirm login on the computer")) { sig, err ->
+                if (sig == null) { loginFlowBusy = false; explainSignError(err); showHome(); return@signWithBiometric }
+                api("POST", "/api/mobile/pc-login", JSONObject().put("device_id", did).put("nonce", nonce)
+                    .put("qr_token", qr).put("signature", sig), null) { c2, j2, _ ->
+                    loginFlowBusy = false
+                    if (c2 == 200 && j2.optBoolean("success", false)) {
+                        playToneSuccess(); vibrateSuccess()
+                        toastMsg(L("✅ تمّ الدخول على الكمبيوتر", "✅ Logged in on the computer"))
+                    } else {
+                        if (j2.optString("code") == "device_revoked") markRevoked(j2.optString("error", ""))
+                        else if (c2 == 403) fetchStatus(true)
+                        playToneError(); vibrateError()
+                        toastMsg(if (c2 == -1) netErrorText() else j2.optString("error", L("تعذّر التأكيد", "Could not confirm")))
+                    }
+                    showHome()
+                }
+            }
+        }
+    }
+
     private fun setDotColor(colorHex: String) {
         val shape = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -1659,49 +2107,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-    // 🔄 تحديثٌ يدويٌّ بنتيجةٍ صريحةٍ (بلا إعادةِ تشغيلِ البرنامج).
-    private fun refreshStatus() {
-        val testUrl = "${getServerUrl()}/api/scan"
-        val request = Request.Builder().url(testUrl).get().build()
-        httpClient.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                updateConnectionUi(false)
-                val paired = prefs.getBoolean("is_paired", false)
-                runOnUiThread {
-                    playToneWarning(); vibrateWarning()
-                    if (paired) {
-                        txtItemName.text = "🔴 غير متصل بالخادم"
-                        txtItemDetails.text = "تأكّد أن الجوال والكمبيوتر على نفس الشبكة والبرنامج يعمل"
-                        txtStatusBadge.text = "❌ لا يوجد اتصال — أعد المحاولة"
-                    } else {
-                        txtItemName.text = "🔴 لست مقترناً بالخادم"
-                        txtItemDetails.text = "اضغط \"أعد الربط\" وامسح رمز الربط (QR) من الكمبيوتر"
-                        txtStatusBadge.text = "❌ يلزم الاقتران أولاً"
-                    }
-                    setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
-                }
-            }
-            override fun onResponse(call: Call, response: Response) {
-                val connected = response.code in 200..499
-                updateConnectionUi(connected)   // يضبطُ is_paired=true عند النجاح
-                runOnUiThread {
-                    if (connected) {
-                        playToneSuccess(); vibrateSuccess()
-                        txtItemName.text = "✅ متصل بالخادم — جاهز للمسح"
-                        txtItemDetails.text = "الحالة مُحدّثة"
-                        txtStatusBadge.text = "🔗 متصلٌ وجاهز"
-                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
-                    } else {
-                        playToneWarning(); vibrateWarning()
-                        txtItemName.text = "⚠️ الخادم ردّ بخطأ (${response.code})"
-                        txtItemDetails.text = "تأكّد أن البرنامج يعمل على الكمبيوتر"
-                        txtStatusBadge.text = "❌ اتصالٌ غيرُ مكتمل"
-                        setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
-                    }
-                }
-            }
-        })
-    }
     private fun updateConnectionUi(connected: Boolean) {
         isServerConnected = connected
         // أيُّ اتصالٍ ناجحٍ فعليٍّ = مقترنٌ (يفتحُ المسح). يشملُ الفحصَ الدوريَّ والاختبارَ اليدوي.
@@ -1716,6 +2121,7 @@ class MainActivity : AppCompatActivity() {
                 txtConnectionStatus.text = "غير متصل بالخادم 🔴"
                 txtConnectionStatus.setTextColor(Color.parseColor("#EF4444"))
             }
+            updateHomeConnection()
         }
     }
     private fun testServerConnection() {
@@ -1742,9 +2148,16 @@ class MainActivity : AppCompatActivity() {
         })
     }
     private fun startCamera() {
+        cameraWanted = true
+        if (!allPermissionsGranted()) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1001)
+            return
+        }
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
+            this.cameraProvider = cameraProvider
+            if (!cameraWanted) return@addListener   // أُغلقت الشاشة قبل أن تجهز الكاميرا
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
@@ -1796,6 +2209,15 @@ class MainActivity : AppCompatActivity() {
             }
         }, ContextCompat.getMainExecutor(this))
     }
+    /** 📱 v1.23 — الكاميرا تُطفأ خارج الماسح/الجرد/الربط/دخول الكمبيوتر (بطاريّة + خصوصيّة). */
+    private fun stopCamera() {
+        cameraWanted = false
+        try { cameraProvider?.unbindAll() } catch (e: Exception) {}
+        camera = null
+        isTorchOn = false
+        try { btnTorch.setImageResource(android.R.drawable.ic_menu_day) } catch (e: Exception) {}
+    }
+
     private fun toggleTorch() {
         val cam = camera ?: return
         if (cam.cameraInfo.hasFlashUnit()) {
@@ -1806,110 +2228,34 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "الفلاش غير متاح", Toast.LENGTH_SHORT).show()
         }
     }
-    // 🔗 يفكّكُ رمزَ الربط ويحفظُ عنوانَ الكمبيوتر ورمزَ الكاشير، ثمّ يتصلُ فوراً.
-    private fun handleLinkQR(code: String) {
-        try {
-            val uri = android.net.Uri.parse(code)
-            val ip = uri.getQueryParameter("ip")
-            val port = uri.getQueryParameter("port") ?: "5005"
-            val sid = uri.getQueryParameter("sid") ?: "default"
-            // 🔑 مفتاحُ الجلسة (اختياريّ): يأتي في رمز الربطِ الجديد. القديمُ بلا مفتاحٍ = ""
-            //    فيبقى العملُ كما كان حتى يُفعّلَ المالكُ فرضَ المفتاحِ من لوحته.
-            val token = uri.getQueryParameter("token") ?: ""
-            if (ip.isNullOrBlank()) {
-                runOnUiThread { playToneWarning(); vibrateWarning()
-                    txtItemName.text = "⚠️ رمز ربط غير صالح"; txtItemDetails.text = "لا يحتوي عنوان الكمبيوتر" }
-                return
-            }
-            prefs.edit()
-                .putString("server_ip", ip)
-                .putString("server_port", port)
-                .putString("session_id", sid)
-                .putString("scan_token", token)
-                .apply()
-            reloadSiteIfAddressChanged()
-            runOnUiThread {
-                // حُفظ العنوان — لكن لا نُعلنُ النجاحَ قبلَ التحقّقِ الفعليِّ من الخادم
-                edtServerIp.setText(ip); edtServerPort.setText(port)
-                txtItemName.text = "⏳ جارٍ التحقّق من الاتصال…"
-                txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
-                txtStatusBadge.text = "⏳ فحص الاتصال بالكمبيوتر…"
-                setBadgeStyle("#1E293B", "#38BDF8", "#334155")
-                closeSettings()
-            }
-            // 🔎 تحقّقٌ حقيقيّ: الاقترانُ ناجحٌ فقط إن ردَّ الخادم
-            verifyLinkConnection(ip, port, sid)
-        } catch (e: Exception) {
-            runOnUiThread { playToneError(); vibrateError()
-                txtItemName.text = "🔴 تعذّر قراءة رمز الربط"; txtItemDetails.text = e.message ?: "" }
-        }
-    }
-
-    // 🔎 يتحقّقُ فعلياً من وصولِ الخادم بعدَ قراءةِ رمزِ الربط.
-    // النجاحُ (صوتٌ أخضرُ ورسالةُ "تم الربط") لا يظهرُ إلا إن ردَّ الكمبيوتر فعلاً.
-    private fun verifyLinkConnection(ip: String, port: String, sid: String) {
-        val testUrl = "http://$ip:$port/api/scan"
-        val request = Request.Builder().url(testUrl).get().build()
-        httpClient.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                // العنوانُ محفوظٌ لكنِ الخادمُ لا يردّ — نصارحُ المستخدمَ بلا ادّعاءِ نجاح
-                updateConnectionUi(false)
-                runOnUiThread {
-                    playToneWarning(); vibrateWarning()
-                    txtItemName.text = "⚠️ حُفظ العنوان — لكن لا يوجد اتصال"
-                    txtItemDetails.text = "الكمبيوتر ($ip) لا يردّ. تأكّد: الجوّال والكمبيوتر على نفس الواي فاي، والبرنامج يعمل."
-                    txtStatusBadge.text = "🔴 غير متصل — أعد المحاولة بعد التأكّد من الشبكة"
-                    setBadgeStyle("#450A0A", "#F87171", "#EF4444")
-                }
-            }
-            override fun onResponse(call: Call, response: Response) {
-                val connected = response.code in 200..499
-                updateConnectionUi(connected)
-                runOnUiThread {
-                    if (connected) {
-                        prefs.edit().putBoolean("is_paired", true).apply()   // اقترانٌ حقيقيٌّ مؤكّد
-                        playToneSuccess(); vibrateSuccess()
-                        txtItemName.text = "✅ تم الربط والاتصال بالخادم"
-                        txtItemDetails.text = "الكاشير: $sid  |  $ip:$port"
-                        txtStatusBadge.text = "🔗 مقترنٌ ومتصلٌ بالكاشير ($sid)"
-                        setBadgeStyle("#14532D", "#4ADE80", "#22C55E")
-                        Toast.makeText(this@MainActivity, "تم ربط الجوّال والاتصال بالكاشير: $sid", Toast.LENGTH_LONG).show()
-                        // لا إرسالَ تلقائياً للمعلّقات — الكاشيرُ يُرسلُها بضغطةٍ واعيةٍ على الشريط
-                        //   بعد التأكّدِ أنّ الفاتورةَ الصحيحةَ مفتوحة (منعَ الحقنِ في فاتورةٍ خطأ).
-                    } else {
-                        playToneWarning(); vibrateWarning()
-                        txtItemName.text = "⚠️ حُفظ العنوان — الخادم ردّ بخطأ"
-                        txtItemDetails.text = "استجابة غير متوقعة (${response.code}). تأكّد أن البرنامج يعمل على المنفذ $port."
-                        txtStatusBadge.text = "🔴 اتصالٌ غيرُ مكتمل"
-                        setBadgeStyle("#450A0A", "#F87171", "#EF4444")
-                    }
-                }
-            }
-        })
-    }
-
     private fun onBarcodeDetected(code: String) {
         // 🐞 v1.22 — مسحةٌ جديدةٌ وصلت: ألغِ أيّ مهلةَ مسحٍ تلقائيٍّ معلَّقة من نتيجةِ
         //   المسحةِ السابقة، فورًا (قبل أيّ فرع)، كي لا تُمسَح نتيجةُ هذه المسحةِ الجديدة
         //   وسط انتظار الردّ من الخادم.
         resultClearRunnable?.let { heartbeatHandler.removeCallbacks(it); resultClearRunnable = null }
-        // 🔗 رمزُ ربطٍ (QR من شاشة /link في الكمبيوتر)؟ عالِجه كإعداداتٍ لا كباركودِ صنف.
-        if (code.startsWith("awael://link")) {
-            handleLinkQR(code)
+        // 📱 v1.23 — رمز ربط الجوال (من شاشة المستخدمين ← أجهزة الجوال)
+        if (code.startsWith("awael://enroll")) {
+            if (mode == "enroll" && !loginFlowBusy) handleEnrollQR(code)
+            else if (mode != "enroll") runOnUiThread { playToneWarning()
+                toastMsg(L("هذا رمز ربط جوال — افتحه من الشاشة الرئيسيّة ← «ربط الجوال» أو «عن التطبيق» ← «ربط من جديد»",
+                           "This is a phone link code — use Home → Link phone")) }
             return
         }
-        // 🧮 رمزُ جلسةِ جردٍ (QR من شاشة الجرد في الكمبيوتر)؟ ادخلْ وضعَ الجرد.
-        if (code.startsWith("awael://stocktake")) {
-            handleStocktakeQR(code)
+        // الرموز القديمة (ربط الماسح / رمز جلسة الجرد) أُلغيت: صارت صلاحيّاتٍ على الجوال المربوط.
+        if (code.startsWith("awael://link") || code.startsWith("awael://stocktake")) {
+            runOnUiThread { playToneWarning(); vibrateWarning()
+                toastMsg(L("رمزٌ من الطريقة القديمة — الربط الآن مرّةً واحدة من شاشة المستخدمين ← أجهزة الجوال، والجرد من مربّع «الجرد» في الشاشة الرئيسيّة",
+                           "Old-style code — link once from Users → Mobile devices; stocktake is on the Home screen")) }
             return
         }
-        // 🐞 v1.14 — محاولةُ دخولٍ سابقةٌ لا تزال تنتظر نتيجةَ البصمة: تجاهلْ أيَّ
-        //   مسحٍ آخر (الكاميرا لا تزال تعمل، وقد تلتقط باركودَ صنفٍ قريبٍ خطأً
-        //   وأنت تُعيد وضعَ إصبعك على الحسّاس) حتى تنتهي هذه المحاولةُ تماماً.
+        // 🐞 v1.14 — محاولةٌ جاريةٌ تنتظر البصمة/الخادم: تجاهلْ أيَّ مسحٍ آخر حتى تنتهي.
         if (loginFlowBusy) return
-        // 🔐 v1.12 — رمزُ تسجيلِ دخولٍ (QR من شاشة الدخول فى الكمبيوتر)؟ أكّدْه بالبصمة.
+        // 🔐 رمز شاشة الدخول في الكمبيوتر
         if (code.startsWith("awael://login")) {
-            handleLoginQR(code)
+            if (mode == "pclogin") handlePcLoginQR(code)
+            else runOnUiThread { playToneWarning()
+                toastMsg(L("للدخول للكمبيوتر: الشاشة الرئيسيّة ← «الدخول للكمبيوتر» ثم امسح الرمز",
+                           "To log in on the computer: Home → Computer login")) }
             return
         }
         // 🧮 نحن داخلَ وضعِ الجرد؟ الباركودُ يُضافُ للقائمةِ المحلّيّةِ (لا يُرسَلُ للكاشير).
@@ -1929,33 +2275,29 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        // 🔒 بوابةُ الوضوح: لا نُرسلُ ونحن غيرُ مقترنين — نُصارحُ الكاشيرَ بالسبب مباشرةً.
-        val isPaired = prefs.getBoolean("is_paired", false)
-        if (!isPaired) {
+        // لا شيء يُرسَل للكمبيوتر إلا من شاشة «قارئ الباركود» (الرمز والربط لهما شاشاتهما).
+        if (mode != "scanner") {
+            if (mode == "enroll" || mode == "pclogin") runOnUiThread { playToneWarning()
+                showTopResult(if (mode == "enroll") L("⚠️ هذا ليس رمز ربط — امسح الرمز من شاشة المستخدمين", "⚠️ Not a link code")
+                              else L("⚠️ هذا ليس رمز دخول — امسح الرمز من شاشة دخول الكمبيوتر", "⚠️ Not a login code"), "#B45309") }
+            return
+        }
+        // 📱 v1.23 — المسح يحمل تذكرة الجوال المربوط (بلا sid ولا مفتاحِ جلسة): الخادم يعرف مَن ولأيّ كمبيوتر.
+        val ticket = validTicket()
+        if (ticket == null) {
             runOnUiThread {
-                playToneError(); vibrateError()
-                showTopResult(L("🔴 لست مقترناً — امسح رمز الربط", "🔴 Not linked — scan the link QR"), "#B91C1C")
-                speak("لست مقترنا، امسح رمز الربط", "Not linked, scan the link code")
-                txtItemName.text = ""
-                txtItemDetails.text = L("الباركود: ", "Barcode: ") + code
-                txtStatusBadge.text = L("❌ افتح القائمة ← إعادة الربط، وامسح QR من الكمبيوتر", "❌ Open menu → Re-link, scan QR from the computer")
-                setBadgeStyle("#7F1D1D", "#EF4444", "#DC2626")
-                scheduleAutoClear()
+                playToneWarning()
+                showTopResult(L("🔒 افتح بالبصمة ثم أعد المسح", "🔒 Unlock with fingerprint, then scan again"), "#B45309")
+                unlockDevice(L("قارئ الباركود", "Barcode scanner")) { ok ->
+                    if (ok) showTopResult(L("✅ جاهز — أعد المسح", "✅ Ready — scan again"), "#15803D")
+                }
             }
             return
         }
         val targetUrl = "${getServerUrl()}/api/scan"
-        // نرسل sid مع الباركود ليصل للكاشير المقترن به هذا الجوّال (عزلُ الأجهزة المتعدّدة).
-        val sid = prefs.getString("session_id", "default") ?: "default"
-        // 🔑 مفتاحُ الجلسة — يُرسَل مع كلّ مسح إن وُجد؛ فارغٌ = التطبيقُ لم يُقترن بمفتاحٍ بعد
-        //    (يُرفض المسحُ فقط إن فعّل المالكُ الفرضَ في لوحته).
-        val token = prefs.getString("scan_token", "") ?: ""
-        val jsonPayload = JSONObject().apply {
-            put("barcode", code); put("sid", sid)
-            if (token.isNotBlank()) put("token", token)
-        }
+        val jsonPayload = JSONObject().apply { put("barcode", code) }
         val requestBody = jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder().url(targetUrl).post(requestBody).build()
+        val request = Request.Builder().url(targetUrl).header("X-Device-Ticket", ticket).post(requestBody).build()
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 // لا حفظَ محلياً: فشلٌ صريحٌ ⇒ يُعيدُ الكاشيرُ المسحَ بعدَ رجوعِ الاتصال
@@ -1982,6 +2324,7 @@ class MainActivity : AppCompatActivity() {
                     //   نجاح الاستجابة (2xx) أوّلاً ونعرض رسالة الخادم الحقيقية عند الرفض.
                     if (!response.isSuccessful) {
                         val errMsg = resJson.optString("error", resJson.optString("message", "خطأ من الخادم (${response.code})"))
+                        handleDeviceDenial(response.code, resJson)   // تذكرة منتهية/جوال مسحوب/صلاحيّة موقوفة
                         runOnUiThread {
                             playToneError(); vibrateError()
                             showTopResult(L("🔴 رُفض: $errMsg", "🔴 Rejected: $errMsg"), "#B91C1C")
@@ -2113,35 +2456,6 @@ class MainActivity : AppCompatActivity() {
     // ═══════════════════════════════════════════════════════════════════
     // 🧮 الجردُ الجماعيّ — استقبالُ الجلسةِ، العدُّ دونَ اتصالٍ، ثمّ المزامنة
     // ═══════════════════════════════════════════════════════════════════
-
-    /** يفكّكُ رمزَ جلسةِ الجرد ويدخلُ وضعَ العدّ. الصيغة:
-     *  awael://stocktake?ip=&port=&session=&code=&wh=&retain=&counter=&start=&name= */
-    private fun handleStocktakeQR(code: String) {
-        try {
-            val uri = android.net.Uri.parse(code)
-            val ip = uri.getQueryParameter("ip") ?: ""
-            val port = uri.getQueryParameter("port") ?: "5005"
-            val sid = uri.getQueryParameter("session") ?: ""
-            val ccode = uri.getQueryParameter("code") ?: ""
-            val counter = uri.getQueryParameter("counter") ?: ""
-            val name = uri.getQueryParameter("name") ?: ""
-            val retain = (uri.getQueryParameter("retain") ?: "30").toIntOrNull() ?: 30
-            if (sid.isBlank()) {
-                runOnUiThread { playToneWarning(); vibrateWarning()
-                    showTopResult(L("⚠️ رمز جرد غير صالح", "⚠️ Invalid stocktake code"), "#D97706") }
-                return
-            }
-            if (ip.isNotBlank()) {
-                prefs.edit().putString("server_ip", ip).putString("server_port", port).apply()
-                reloadSiteIfAddressChanged()
-                edtServerIp.setText(ip); edtServerPort.setText(port)
-            }
-            enterStocktakeSession(sid, ccode, name, counter, retain, true)
-        } catch (e: Exception) {
-            runOnUiThread { playToneError(); vibrateError()
-                showTopResult(L("🔴 تعذّر قراءة رمز الجرد", "🔴 Could not read stocktake code"), "#B91C1C") }
-        }
-    }
 
     /** يُنزّلُ فهرسَ الأصنافِ (باركود → اسم/معرّف) مرّةً ويخزّنُه محلياً — ليعملَ الاسمُ دونَ اتصال. */
     private fun downloadCatalog() {
@@ -2339,6 +2653,9 @@ class MainActivity : AppCompatActivity() {
     // ── واجهةُ الجرد (تُبنى برمجياً — الكاميرا تبقى ظاهرةً وسطاً للتصويب، والقائمةُ أسفلَها) ──
     private fun showStocktakeUI() {
         stkOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        homeView?.visibility = View.GONE
+        mode = "stocktake"
+        startCamera()
         previewView.visibility = View.VISIBLE; previewView.bringToFront()
         try { findViewById<View>(R.id.scanBox)?.visibility = View.GONE } catch (e: Exception) {}
         bottomBar.visibility = View.GONE
@@ -2564,7 +2881,7 @@ class MainActivity : AppCompatActivity() {
         stkOverlay = null; stkListLayout = null; stkPendingText = null; stkTitleText = null
         // امسحْ علامةَ الاستئنافِ التلقائيِّ فقط (نُبقي stk_last_sid ليعودَ من زرِّ القائمة).
         prefs.edit().remove("stk_active_sid").apply()
-        Toast.makeText(this, L("خرجتَ من وضعِ الجرد — بياناتُك محفوظة. للعودة: القائمة ← جلسة الجرد", "Left stocktake — data saved. To return: Menu → Stocktake"), Toast.LENGTH_LONG).show()
+        Toast.makeText(this, L("خرجتَ من وضعِ الجرد — بياناتُك محفوظة. للعودة: الشاشة الرئيسيّة ← الجرد", "Left stocktake — data saved. To return: Home → Stocktake"), Toast.LENGTH_LONG).show()
         // إعادةُ بناءِ الشاشةِ نظيفةً (تُعيدُ تصميمَ الماسحِ الأصليَّ تماماً بلا أزرارٍ قديمةٍ عالقة)
         window.decorView.post { recreate() }
     }
@@ -2580,17 +2897,25 @@ class MainActivity : AppCompatActivity() {
         if (scanForSite) { stopSiteScan(); return }
         val w = web
         if (w != null && w.visibility == View.VISIBLE) { closeSite(); return }
+        if (layoutSettings.visibility == View.VISIBLE) { closeSettings(); return }
+        if (mode != "home") { showHome(); return }
         super.onBackPressed()
     }
     // بعدَ العودةِ للتطبيق (مثلاً بعد تثبيتِ صوتِ عربيّ) نُعيدُ كشفَ العربيّةِ ونحدّثُ الواجهة.
     override fun onResume() {
         super.onResume()
         if (ttsReady) { detectArabic(); applyLangUi(false) }
+        if (mode == "home") fetchStatus(false)   // تحديث الحالة تلقائيّاً عند العودة للتطبيق
     }
     override fun onDestroy() {
         super.onDestroy()
         heartbeatHandler.removeCallbacksAndMessages(null)
         toneGenerator?.release()
         try { tts?.stop(); tts?.shutdown() } catch (e: Exception) {}
+    }
+
+    companion object {
+        @Volatile private var sTicket: String? = null
+        @Volatile private var sTicketExp: Long = 0L
     }
 }

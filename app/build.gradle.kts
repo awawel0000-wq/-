@@ -11,8 +11,8 @@ android {
         applicationId = "com.pos.scanner"
         minSdk = 23
         targetSdk = 34
-        versionCode = 45
-        versionName = "1.22"
+        versionCode = 46
+        versionName = "1.23"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
